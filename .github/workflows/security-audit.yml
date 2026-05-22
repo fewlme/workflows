@@ -117,7 +117,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          model: ${{ inputs.claude_model }}
           claude_args: '--max-turns 50 --allowedTools "Bash,Read,Grep,Glob,Edit"'
           prompt: |
             You are a senior application security engineer auditing this repository.
