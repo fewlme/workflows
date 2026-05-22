@@ -24,7 +24,7 @@ jobs:
       issues: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Detect stack
         id: stack
@@ -47,7 +47,7 @@ jobs:
 
       - name: Setup Node
         if: steps.stack.outputs.has_npm == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: '20'
 
@@ -60,7 +60,7 @@ jobs:
 
       - name: Setup Python
         if: steps.stack.outputs.has_python == 'true'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
