@@ -27,19 +27,20 @@ jobs:
       issues: write
       id-token: write
     steps:
-      - uses: actions/checkout@v5
-
       - name: Claude performance review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are a performance engineer reviewing this repository for runtime and build-time performance issues.
 
             ## Context
             - Repository: ${{ github.repository }}
             - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
 
             ## Your task
 
@@ -53,44 +54,51 @@ jobs:
                - SELECT * on wide tables, fetching more than needed
                - Synchronous I/O in request paths that should be async or queued
                - Heavy work in middleware or boot phase
-               - Missing caching on hot read paths (HTTP, DB queries, computed values)
-               - Cache keys with high cardinality or no eviction strategy
-               - Large object serialization in hot paths (full ORM models in JSON responses)
+               - Missing caching on hot read paths
+               - Large object serialization in hot paths
                - Synchronous external HTTP calls without timeout/retry
-               - Memory leaks: unbounded arrays, infinite caches, event listeners not removed
-               - Inefficient algorithms: O(n²) where O(n) is trivial, repeated work in loops
+               - Memory leaks
+               - Inefficient algorithms: O(n²) where O(n) is trivial
 
                **Frontend (React, Next.js, etc.)**
-               - Re-renders: missing memoization, unstable props, context value churn
-               - Bundle size: heavy libraries imported in client components, missing dynamic imports
-               - Images not optimized: missing next/image, no width/height, no lazy loading
-               - Waterfalls: sequential fetches that could be parallelized
-               - Client-side rendering of data that could be SSR/ISR/static
+               - Re-renders: missing memoization, unstable props, context churn
+               - Bundle size: heavy libs in client components, missing dynamic imports
+               - Images not optimized
+               - Sequential fetches that could be parallel
+               - CSR data that could be SSR/ISR/static
                - Large lists without virtualization
-               - Blocking scripts, no `defer`/`async`, render-blocking CSS
-               - Missing `Suspense` boundaries causing whole-page loading states
+               - Blocking scripts, no defer/async
 
                **Build / CI**
-               - Slow build steps that could be cached
-               - Missing dependency caching in CI
-               - Tests running serially when parallel is possible
+               - Slow build steps without caching
+               - Tests serial where parallel is possible
 
             3. **For each finding**:
-               - Severity: critical (user-facing breakage at scale) | high (noticeable lag) | medium (suboptimal) | low (micro-opt)
+               - Severity: critical | high | medium | low
                - File path and line numbers
-               - Explanation of *why this is slow in this codebase* (estimate the impact: "called on every page load", "runs per item in a list of N", etc.)
+               - Why slow in *this* codebase (impact estimate)
                - Concrete fix with code snippet
 
             4. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
-            5. **If create_issues is true**, open one GitHub issue per finding:
-               - Title: `[Perf][<severity>] <short description>`
-               - Labels: `performance`, `<severity>`
-               - Skip duplicates as before
+            5. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label performance --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[Perf][<severity>] <short>" --label performance --label "<severity>" --body "<body>"`
+               - Body includes file:line, why slow, fix snippet
 
-            6. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`.
+            6. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## Performance Audit Results`
+               - Stack detected
+               - Files/directories analyzed (list them)
+               - Total findings count by severity
+               - If no findings at threshold: `✅ No performance issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
-            - Don't flag things "in case" they'd be slow. Tie every finding to real code paths users actually hit.
-            - Don't suggest premature optimization (e.g. micro-bench tweaks on cold paths).
-            - If you can't tell whether code is hot or cold, lower severity.
+            - Tie every finding to real code paths.
+            - No premature micro-optimization.
+            - If you can't tell hot vs cold, lower severity.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
