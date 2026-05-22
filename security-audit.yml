@@ -1,0 +1,219 @@
+# .github/workflows/security-audit.yml
+name: Security Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        description: 'Minimum severity to report (critical|high|medium|low)'
+        type: string
+        default: 'high'
+      create_issues:
+        description: 'Create GitHub issues for findings'
+        type: boolean
+        default: true
+      claude_model:
+        description: 'Claude model to use'
+        type: string
+        default: 'claude-sonnet-4-6'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      security-events: write
+      pull-requests: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect stack
+        id: stack
+        run: |
+          echo "has_composer=$([ -f composer.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_docker=$([ -f Dockerfile ] || [ -f docker-compose.yml ] || [ -f compose.yml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      # ---- Dependency audits ----
+
+      - name: Setup PHP
+        if: steps.stack.outputs.has_composer == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+
+      - name: Composer audit
+        if: steps.stack.outputs.has_composer == 'true'
+        run: |
+          composer install --no-progress --no-interaction --prefer-dist || true
+          composer audit --format=json > composer-audit.json || true
+
+      - name: Setup Node
+        if: steps.stack.outputs.has_npm == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: NPM audit
+        if: steps.stack.outputs.has_npm == 'true'
+        run: |
+          npm install --package-lock-only --ignore-scripts || true
+          npm audit --json > npm-audit.json || true
+
+      - name: Setup Python
+        if: steps.stack.outputs.has_python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python audit
+        if: steps.stack.outputs.has_python == 'true'
+        run: |
+          pip install pip-audit
+          pip-audit --format=json --output=pip-audit.json || true
+
+      # ---- Secret + SAST scanning ----
+
+      - name: Gitleaks (secrets)
+        uses: gitleaks/gitleaks-action@v2
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+
+      - name: Semgrep (SAST)
+        uses: returntocorp/semgrep-action@v1
+        continue-on-error: true
+        with:
+          config: p/auto p/security-audit p/owasp-top-ten p/secrets
+          generateSarif: true
+
+      - name: Trivy (deps + Docker + IaC)
+        uses: aquasecurity/trivy-action@master
+        continue-on-error: true
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: 'trivy-report.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      # ---- Claude triage ----
+
+      - name: Claude analysis & triage
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          model: ${{ inputs.claude_model }}
+          claude_args: '--max-turns 50 --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          prompt: |
+            You are a senior application security engineer auditing this repository.
+
+            ## Context
+
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }} (report only findings at this level or above)
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
+
+            ## Inputs available in the working directory
+
+            Tool reports (any may be missing if the stack doesn't apply):
+            - `composer-audit.json` - PHP dependency vulnerabilities
+            - `npm-audit.json` - JS/TS dependency vulnerabilities
+            - `pip-audit.json` - Python dependency vulnerabilities
+            - `trivy-report.json` - filesystem, dependency, Docker and IaC issues
+            - Gitleaks results from the previous step (check job logs / SARIF)
+            - Semgrep findings (SARIF, also visible in the GitHub Security tab)
+            - The full source code of the repository
+
+            ## Your task
+
+            1. **Detect the stack** by inspecting the repository (frameworks, languages, build system, runtime). State what you found in one line.
+
+            2. **Parse every tool report that exists** and build a unified, deduplicated list of findings.
+
+            3. **Validate against the actual source** - read the code to confirm each finding is exploitable in context. Discard false positives, dev-only dependencies, test fixtures, and clearly unreachable code. Be ruthless about noise.
+
+            4. **Manually review the code for issues the tools miss**, focusing on:
+               - Injection: SQL, NoSQL, command, template, LDAP, header injection
+               - Authentication: weak password handling, broken session management, missing rate limits on auth endpoints
+               - Authorization: broken access control, IDOR, missing checks on routes/APIs/resources
+               - Cryptography: weak algorithms, hardcoded keys, bad randomness, missing TLS verification
+               - Hardcoded secrets, API keys, tokens, credentials in code or config
+               - Insecure deserialization, unsafe `eval`-like patterns, prototype pollution
+               - SSRF, XXE, open redirects, path traversal, zip slip
+               - XSS (stored, reflected, DOM) and CSRF gaps
+               - Insecure file upload handling (type, size, location, execution)
+               - CORS misconfigurations, missing security headers, weak cookie flags
+               - Dockerfile issues (root user, secrets in ENV, unpinned base images, no healthcheck on prod, unnecessary capabilities)
+               - CI/CD issues (workflow secrets exposure, `pull_request_target` misuse, unpinned actions)
+               - Dependency risks beyond CVEs (abandoned packages, suspicious typosquats)
+
+            5. **For each confirmed issue**, produce:
+               - Severity: critical | high | medium | low
+               - CWE identifier if applicable
+               - Exact file path and line numbers
+               - 2-3 sentence explanation of the actual impact in *this* codebase (not a generic CWE description)
+               - A concrete code-level fix (diff or replacement snippet)
+
+            6. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            7. **If create_issues is true**, open one GitHub issue per confirmed finding using `gh issue create`:
+               - Title: `[Security][<severity>] <short description>`
+               - Labels: `security`, `<severity>`
+               - Body: includes file/line, CWE, impact, suggested fix
+               - **Before creating**, run `gh issue list --label security --state open --search "<title>"` and skip if a matching open issue already exists (idempotent)
+
+            8. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with:
+               - Stack detected
+               - Total findings by severity
+               - Table: severity | file:line | issue | issue link (or "skipped: already open")
+               - Note any tool reports that were missing or failed
+
+            ## Rules
+
+            - Be precise and skeptical. No noise, no duplicates, no theoretical issues without a concrete code reference.
+            - If you cannot verify a finding against source code, lower its severity or drop it.
+            - Never include actual secret values in issue bodies - redact them.
+            - If no findings reach the threshold, write a "clean" summary and exit successfully.
+
+      # ---- Notifications ----
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          STATUS: ${{ job.status }}
+        run: |
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "No Slack webhook configured, skipping notification"
+            exit 0
+          fi
+
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Asecurity"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [ "$STATUS" = "success" ]; then
+            EMOJI="✅"
+            MSG="Security audit passed for *${{ github.repository }}*"
+          else
+            EMOJI="🚨"
+            MSG="Security audit found issues in *${{ github.repository }}*"
+          fi
+
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"${EMOJI} ${MSG}\n• Open issues: ${ISSUES_URL}\n• Run: ${RUN_URL}\"}" \
+            "$SLACK_WEBHOOK"
