@@ -1,0 +1,96 @@
+# .github/workflows/performance.yml
+name: Performance Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Claude performance review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          prompt: |
+            You are a performance engineer reviewing this repository for runtime and build-time performance issues.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+
+            ## Your task
+
+            1. **Detect the stack and runtime profile** (backend/frontend/full-stack, framework, DB if any). One line.
+
+            2. **Review the code for performance issues** in priority order:
+
+               **Backend (PHP, Node, Python, etc.)**
+               - N+1 query patterns (loops calling DB inside)
+               - Missing indexes implied by WHERE/JOIN/ORDER BY on non-indexed columns
+               - SELECT * on wide tables, fetching more than needed
+               - Synchronous I/O in request paths that should be async or queued
+               - Heavy work in middleware or boot phase
+               - Missing caching on hot read paths (HTTP, DB queries, computed values)
+               - Cache keys with high cardinality or no eviction strategy
+               - Large object serialization in hot paths (full ORM models in JSON responses)
+               - Synchronous external HTTP calls without timeout/retry
+               - Memory leaks: unbounded arrays, infinite caches, event listeners not removed
+               - Inefficient algorithms: O(n²) where O(n) is trivial, repeated work in loops
+
+               **Frontend (React, Next.js, etc.)**
+               - Re-renders: missing memoization, unstable props, context value churn
+               - Bundle size: heavy libraries imported in client components, missing dynamic imports
+               - Images not optimized: missing next/image, no width/height, no lazy loading
+               - Waterfalls: sequential fetches that could be parallelized
+               - Client-side rendering of data that could be SSR/ISR/static
+               - Large lists without virtualization
+               - Blocking scripts, no `defer`/`async`, render-blocking CSS
+               - Missing `Suspense` boundaries causing whole-page loading states
+
+               **Build / CI**
+               - Slow build steps that could be cached
+               - Missing dependency caching in CI
+               - Tests running serially when parallel is possible
+
+            3. **For each finding**:
+               - Severity: critical (user-facing breakage at scale) | high (noticeable lag) | medium (suboptimal) | low (micro-opt)
+               - File path and line numbers
+               - Explanation of *why this is slow in this codebase* (estimate the impact: "called on every page load", "runs per item in a list of N", etc.)
+               - Concrete fix with code snippet
+
+            4. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            5. **If create_issues is true**, open one GitHub issue per finding:
+               - Title: `[Perf][<severity>] <short description>`
+               - Labels: `performance`, `<severity>`
+               - Skip duplicates as before
+
+            6. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`.
+
+            ## Rules
+            - Don't flag things "in case" they'd be slow. Tie every finding to real code paths users actually hit.
+            - Don't suggest premature optimization (e.g. micro-bench tweaks on cold paths).
+            - If you can't tell whether code is hot or cold, lower severity.

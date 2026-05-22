@@ -1,0 +1,131 @@
+# .github/workflows/dependency-health.yml
+name: Dependency Health (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect stack
+        id: stack
+        run: |
+          echo "has_composer=$([ -f composer.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+
+      - name: Setup PHP
+        if: steps.stack.outputs.has_composer == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Composer outdated
+        if: steps.stack.outputs.has_composer == 'true'
+        run: |
+          composer install --no-progress --no-interaction --prefer-dist || true
+          composer outdated --format=json --direct > composer-outdated.json || true
+
+      - name: Setup Node
+        if: steps.stack.outputs.has_npm == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: NPM outdated
+        if: steps.stack.outputs.has_npm == 'true'
+        run: |
+          npm install --package-lock-only --ignore-scripts || true
+          npm outdated --json > npm-outdated.json || true
+          npm ls --json --all > npm-tree.json 2>/dev/null || true
+
+      - name: Setup Python
+        if: steps.stack.outputs.has_python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python outdated
+        if: steps.stack.outputs.has_python == 'true'
+        run: pip list --outdated --format=json > pip-outdated.json || true
+
+      - name: Claude dependency review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 40 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob"'
+          prompt: |
+            You are a dependency management expert reviewing outdated packages in this repository.
+
+            ## Inputs
+            - `composer-outdated.json`, `npm-outdated.json`, `pip-outdated.json` (any may be missing)
+            - `npm-tree.json` for transitive deps
+            - Full source code
+
+            ## Your task
+
+            1. **Detect the stack** in one line.
+
+            2. **For each outdated direct dependency**, classify it into one of:
+               - **safe**: patch or minor bump, no breaking changes per changelog, low usage in code
+               - **review**: minor/major with notable changes, requires code adjustments, but worth doing
+               - **risky**: major bump with breaking API changes, heavy usage in this codebase, needs careful migration
+               - **skip**: pinned for a known reason, framework constraint, or replaced by a fork
+
+            3. **For each `review` and `risky` package**, check the actual usage in the source code:
+               - How many files use it? Which APIs?
+               - What breaking changes apply to those APIs (consult known changelogs of well-known packages)?
+               - Estimate migration effort: trivial / 1-2h / half-day / multi-day
+
+            4. **Identify abandoned or risky packages**:
+               - Packages that haven't been updated in over 2 years
+               - Packages with very few downloads or maintainer flight
+               - Packages superseded by official replacements
+
+            5. **Group findings into a quarterly upgrade plan**:
+               - "Do now" (safe + review with low effort)
+               - "Plan this sprint" (review with medium effort, or security-adjacent)
+               - "Schedule" (risky majors needing migration time)
+               - "Replace" (abandoned packages with suggested alternatives)
+
+            6. **If create_issues is true**, open ONE summary issue:
+               - Title: `[Deps] Dependency health report - <YYYY-MM-DD>`
+               - Labels: `dependencies`
+               - Body: the full quarterly upgrade plan as a checklist `- [ ] package: from X to Y (effort: ...)`
+               - Skip if an issue with the same date already exists
+
+            7. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with the upgrade plan.
+
+            ## Rules
+            - Don't suggest upgrading dev-only deps unless they break the build or are abandoned.
+            - For frameworks (CodeIgniter, Next.js, Laravel, React), check the project's actual usage before recommending major upgrades.
+            - Never recommend blind `--latest` upgrades. Always group and explain.
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"📦 Dependency report ready for *${{ github.repository }}*\n${RUN_URL}\"}" "$SLACK_WEBHOOK"

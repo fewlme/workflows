@@ -1,0 +1,99 @@
+# .github/workflows/code-quality.yml
+name: Code Quality Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude code quality review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 60 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          prompt: |
+            You are a senior staff engineer doing a code quality review of this repository.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI available as `gh`
+
+            ## Your task
+
+            1. **Detect the stack** (frameworks, languages, build system). State it in one line.
+
+            2. **Review the source code** for quality issues that hurt maintainability, readability, or correctness over time. Focus on:
+               - **Architecture smells**: god classes, god functions, deep coupling, circular dependencies, leaky abstractions, business logic in controllers/views, missing layering
+               - **Complexity**: cyclomatic complexity hotspots, deeply nested conditionals, functions doing too much, files over ~500 lines
+               - **Duplication**: copy-pasted logic that should be extracted, near-duplicate functions
+               - **Error handling**: swallowed exceptions, generic catch-all blocks, missing error context, inconsistent error patterns
+               - **Naming**: misleading or vague names, inconsistent naming conventions, single-letter variables outside trivial scopes
+               - **Dead code**: unreachable branches, unused exports/functions/variables, commented-out blocks
+               - **State management**: shared mutable state, global variables, side effects in surprising places
+               - **Type safety**: untyped or `any`-typed code in TS, missing type hints in PHP, weak interfaces
+               - **Testing gaps**: critical paths with no tests, brittle test setups, tests testing implementation not behavior
+               - **Async/concurrency**: missing awaits, unhandled promise rejections, race conditions, blocking I/O in hot paths
+               - **Resource handling**: unclosed file handles, missing cleanup, leaked connections
+               - **Magic values**: hardcoded numbers/strings that should be named constants or config
+
+            3. **For each confirmed issue**, produce:
+               - Severity: critical | high | medium | low (be conservative — most code-smell issues are medium, reserve high for things that actively cause bugs or slow the team)
+               - Exact file path and line numbers
+               - 2-3 sentence explanation of why it matters in *this* codebase
+               - A concrete refactoring suggestion with a code snippet
+
+            4. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            5. **If create_issues is true**, open one GitHub issue per finding:
+               - Title: `[Quality][<severity>] <short description>`
+               - Labels: `code-quality`, `<severity>`
+               - Body: file/line, why, suggested fix
+               - Skip if a matching open issue exists (run `gh issue list --label code-quality --state open --search "<title>"`)
+
+            6. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with stack detected, totals by severity, and a table of findings.
+
+            ## Rules
+            - Be ruthless about noise. Style preferences (tabs vs spaces, etc.) are NOT findings.
+            - Don't report things a linter would already catch — focus on what humans miss.
+            - Every finding must reference real code with file:line. No theoretical issues.
+            - If the codebase is clean, write a "clean" summary and exit.
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          STATUS: ${{ job.status }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Acode-quality"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Code quality audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}"
+          curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"📊 ${MSG}\"}" "$SLACK_WEBHOOK"
