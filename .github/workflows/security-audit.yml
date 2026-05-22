@@ -117,7 +117,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 50 --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are a senior application security engineer auditing this repository.
 
@@ -171,24 +172,29 @@ jobs:
 
             6. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
-            7. **If create_issues is true**, open one GitHub issue per confirmed finding using `gh issue create`:
-               - Title: `[Security][<severity>] <short description>`
-               - Labels: `security`, `<severity>`
-               - Body: includes file/line, CWE, impact, suggested fix
-               - **Before creating**, run `gh issue list --label security --state open --search "<title>"` and skip if a matching open issue already exists (idempotent)
+            7. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label security --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[Security][<severity>] <short description>" --label security --label "<severity>" --body "<body>"`
+               - Body includes file:line, CWE, impact, suggested fix
+               - Never include actual secret values in issue bodies — redact them
 
-            8. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with:
+            8. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## Security Audit Results`
                - Stack detected
-               - Total findings by severity
-               - Table: severity | file:line | issue | issue link (or "skipped: already open")
-               - Note any tool reports that were missing or failed
+               - Files/directories analyzed and tool reports parsed (list them; note any that were missing or failed)
+               - Total findings count by severity
+               - If no findings at threshold: `✅ No security issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
 
             - Be precise and skeptical. No noise, no duplicates, no theoretical issues without a concrete code reference.
             - If you cannot verify a finding against source code, lower its severity or drop it.
             - Never include actual secret values in issue bodies - redact them.
-            - If no findings reach the threshold, write a "clean" summary and exit successfully.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ---- Notifications ----
 

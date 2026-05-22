@@ -72,9 +72,15 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 40 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob"'
+          show_full_output: true
+          claude_args: '--max-turns 60 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Write"'
           prompt: |
             You are a dependency management expert reviewing outdated packages in this repository.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
 
             ## Inputs
             - `composer-outdated.json`, `npm-outdated.json`, `pip-outdated.json` (any may be missing)
@@ -107,18 +113,27 @@ jobs:
                - "Schedule" (risky majors needing migration time)
                - "Replace" (abandoned packages with suggested alternatives)
 
-            6. **If create_issues is true**, open ONE summary issue:
-               - Title: `[Deps] Dependency health report - <YYYY-MM-DD>`
-               - Labels: `dependencies`
-               - Body: the full quarterly upgrade plan as a checklist `- [ ] package: from X to Y (effort: ...)`
-               - Skip if an issue with the same date already exists
+            6. **If create_issues is `true`** (the value above), open ONE summary issue:
+               - FIRST run: `gh issue list --label dependencies --state open --search "Dependency health report" --json number,createdAt` and check whether any returned issue was created in the last 30 days. If yes, skip creation (idempotent).
+               - If no recent report exists, run: `gh issue create --title "[Deps] Dependency health report - $(date +%Y-%m-%d)" --label dependencies --body "<body>"`
+               - Body is the full quarterly upgrade plan as a checklist: `- [ ] package: from X to Y (effort: ...)`
 
-            7. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with the upgrade plan.
+            7. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if there are no outdated packages, and MUST contain:
+               - `## Dependency Health Report`
+               - Stack detected
+               - Ecosystems analyzed (composer / npm / pip — list which reports were parsed, note any missing)
+               - Counts by bucket: safe / review / risky / skip / abandoned
+               - If everything is up to date: `✅ All direct dependencies are current`
+               - Otherwise: the quarterly upgrade plan (Do now / Plan this sprint / Schedule / Replace) and a link to the summary issue (or "skipped: recent report already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
             - Don't suggest upgrading dev-only deps unless they break the build or are abandoned.
             - For frameworks (CodeIgniter, Next.js, Laravel, React), check the project's actual usage before recommending major upgrades.
             - Never recommend blind `--latest` upgrades. Always group and explain.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Slack notification
         if: always()

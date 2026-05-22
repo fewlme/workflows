@@ -37,15 +37,16 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are a developer experience engineer auditing the documentation of this repository.
 
             ## Context
             - Repository: ${{ github.repository }}
             - Create issues: ${{ inputs.create_issues }}
-            - Open PR with fixes: ${{ inputs.create_pr }}
-            - GH CLI available as `gh`
+            - Open PR with mechanical fixes: ${{ inputs.create_pr }}
+            - GH CLI is authenticated and available as `gh`
 
             ## Your task
 
@@ -92,24 +93,29 @@ jobs:
                - Push and run `gh pr create` with title `docs: automated doc fixes <YYYY-MM-DD>` and a body listing what was changed and why
                - Do NOT auto-fix anything that requires judgment (rewriting sections, adding new docs)
 
-            9. **For non-mechanical gaps**, if `create_issues` is true, open one GitHub issue per gap:
-               - Title: `[Docs][<severity>] <short description>`
-               - Labels: `documentation`, `<severity>`
+            9. **For non-mechanical gaps, if `create_issues` is `true`** (the value above):
+               - For each gap, FIRST run: `gh issue list --label documentation --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[Docs][<severity>] <short description>" --label documentation --label "<severity>" --body "<body>"`
                - Body: what's missing/wrong, why it matters, suggested content outline
-               - Skip if a matching open issue exists
 
-            10. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`:
+            10. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if there are no gaps, and MUST contain:
+                - `## Documentation Audit Results`
                 - Stack detected
                 - Doc inventory (what exists, what doesn't)
-                - Findings by severity
-                - PR opened (if any) with link
-                - Table of issues created
+                - Total findings count by severity
+                - If no gaps: `✅ Documentation is in good shape`
+                - If findings: a markdown table with columns: Severity | File | Issue | GitHub Issue (link or "skipped: already open")
+                - PR opened (if any) with link, or `No PR opened` if create_pr is false / no mechanical fixes applied
+                - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
             - Be a real developer reading this README cold — would you be able to run the project? If yes for the basic flow, README is OK.
             - Don't suggest docs for trivial private helpers. Focus on what external users / new contributors need.
             - Never invent content. If you suggest a section, outline it; don't write it speculatively unless it's a clearly mechanical fix.
             - Redact any actual secrets you might find in env examples.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Slack notification
         if: always()

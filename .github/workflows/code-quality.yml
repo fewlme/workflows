@@ -36,7 +36,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 60 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are a senior staff engineer doing a code quality review of this repository.
 
@@ -44,7 +45,7 @@ jobs:
             - Repository: ${{ github.repository }}
             - Severity threshold: ${{ inputs.severity_threshold }}
             - Create issues: ${{ inputs.create_issues }}
-            - GH CLI available as `gh`
+            - GH CLI is authenticated and available as `gh`
 
             ## Your task
 
@@ -72,19 +73,27 @@ jobs:
 
             4. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
-            5. **If create_issues is true**, open one GitHub issue per finding:
-               - Title: `[Quality][<severity>] <short description>`
-               - Labels: `code-quality`, `<severity>`
-               - Body: file/line, why, suggested fix
-               - Skip if a matching open issue exists (run `gh issue list --label code-quality --state open --search "<title>"`)
+            5. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label code-quality --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[Quality][<severity>] <short description>" --label code-quality --label "<severity>" --body "<body>"`
+               - Body includes file:line, why it matters, suggested refactor
 
-            6. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY` with stack detected, totals by severity, and a table of findings.
+            6. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## Code Quality Audit Results`
+               - Stack detected
+               - Files/directories analyzed (list them)
+               - Total findings count by severity
+               - If no findings at threshold: `✅ No code quality issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
             - Be ruthless about noise. Style preferences (tabs vs spaces, etc.) are NOT findings.
             - Don't report things a linter would already catch — focus on what humans miss.
             - Every finding must reference real code with file:line. No theoretical issues.
-            - If the codebase is clean, write a "clean" summary and exit.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Slack notification
         if: always()

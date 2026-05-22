@@ -52,7 +52,8 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are an accessibility engineer auditing this frontend codebase against WCAG 2.2 AA standards.
 
@@ -60,6 +61,7 @@ jobs:
             - Repository: ${{ github.repository }}
             - Severity threshold: ${{ inputs.severity_threshold }}
             - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
 
             ## Your task
 
@@ -127,23 +129,28 @@ jobs:
 
             5. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
-            6. **If create_issues is true**, open one GitHub issue per finding:
-               - Title: `[A11y][<severity>] <short description>`
-               - Labels: `accessibility`, `<severity>`
-               - Body: WCAG ref, file/line, impact on real users, fix snippet
-               - Skip if a matching open issue exists
+            6. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label accessibility --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[A11y][<severity>] <short description>" --label accessibility --label "<severity>" --body "<body>"`
+               - Body includes WCAG ref, file:line, impact on real users, fix snippet
 
-            7. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`:
+            7. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## Accessibility Audit Results`
                - Framework detected
-               - Components reviewed (count)
-               - Findings by severity with WCAG criteria
-               - Table of issues
+               - Components/pages analyzed (count and list of key paths)
+               - Total findings count by severity
+               - If no findings at threshold: `✅ No accessibility issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | WCAG | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
             - Tie every finding to actual JSX/template code. No theoretical "you should use ARIA" without showing what to ARIA-ify.
             - Don't flag third-party component libraries (e.g. shadcn/ui, Radix, Headless UI primitives) unless they're clearly used incorrectly — they handle a11y internally.
             - Skip findings on storybook stories, test files, or example/demo folders.
             - For Tailwind contrast issues, name the specific class pair (e.g. `text-gray-400 on bg-white`) and suggest the fix.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Slack notification
         if: always()
