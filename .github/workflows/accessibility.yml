@@ -1,0 +1,157 @@
+# .github/workflows/accessibility.yml
+name: Accessibility Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect frontend stack
+        id: stack
+        run: |
+          IS_FRONTEND=false
+          if [ -f package.json ]; then
+            if grep -qE '"(next|react|vue|svelte|astro|nuxt|remix)"' package.json; then
+              IS_FRONTEND=true
+            fi
+          fi
+          echo "is_frontend=$IS_FRONTEND" >> $GITHUB_OUTPUT
+
+      - name: Skip if no frontend detected
+        if: steps.stack.outputs.is_frontend != 'true'
+        run: |
+          echo "## Accessibility Audit Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No frontend framework detected in package.json. Audit only runs on React/Next/Vue/Svelte/Astro/Nuxt/Remix projects." >> $GITHUB_STEP_SUMMARY
+          exit 0
+
+      - name: Claude accessibility review
+        if: steps.stack.outputs.is_frontend == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit"'
+          prompt: |
+            You are an accessibility engineer auditing this frontend codebase against WCAG 2.2 AA standards.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+
+            ## Your task
+
+            1. **Detect the framework** (React, Next.js, Vue, Svelte, Astro, etc.) and the styling approach (Tailwind, CSS modules, styled-components, etc.). One line.
+
+            2. **Find all UI components and pages**. Focus on:
+               - Component files (`.tsx`, `.jsx`, `.vue`, `.svelte`)
+               - Page/route files
+               - Layout components
+               - Form components especially
+               - Modal, dropdown, menu, tab, accordion implementations
+
+            3. **Review against WCAG 2.2 AA**, prioritizing real issues:
+
+               **Semantics & structure**
+               - Heading hierarchy (no `<h3>` before `<h2>`, one `<h1>` per page)
+               - Landmark roles or HTML5 sectioning elements (`<main>`, `<nav>`, `<header>`, `<footer>`)
+               - Lists implemented as `<ul>`/`<ol>`, not `<div>` soup
+               - Buttons vs links: `<button>` for actions, `<a>` for navigation (not `<div onClick>`)
+
+               **Keyboard accessibility**
+               - All interactive elements reachable via Tab
+               - Visible focus styles (not `outline: none` without replacement)
+               - Custom interactive widgets handle keyboard (Enter/Space on buttons, Esc on modals, arrow keys on menus)
+               - Focus trap in modals; focus restoration on close
+               - No keyboard traps in custom components
+
+               **Forms**
+               - Every input has an associated `<label>` (or `aria-label`/`aria-labelledby`)
+               - Error messages linked via `aria-describedby`
+               - Required fields marked with `aria-required` or `required`
+               - Validation errors announced (live regions or `aria-invalid`)
+               - Logical tab order
+
+               **Images & media**
+               - `<img>` has meaningful `alt` (or `alt=""` if decorative)
+               - `next/image` usage includes alt
+               - Icon-only buttons have `aria-label`
+               - Videos have captions/transcripts (flag missing)
+
+               **Color & contrast**
+               - Identify Tailwind/CSS color pairs likely below 4.5:1 (text) or 3:1 (large text / UI components)
+               - Information not conveyed by color alone
+
+               **ARIA**
+               - No invalid ARIA roles or attributes
+               - `aria-hidden` not on focusable elements
+               - Live regions used appropriately (`aria-live`, `role="status"`, `role="alert"`)
+               - Don't use ARIA when native HTML works (`<button>` over `role="button"` on a div)
+
+               **Dynamic content**
+               - Route changes announced (focus management on SPA navigation)
+               - Toasts/notifications announced
+               - Loading states communicated to screen readers
+
+               **Motion & animation**
+               - `prefers-reduced-motion` respected for non-essential animation
+               - No autoplay or auto-scrolling content without controls
+
+            4. **For each finding**:
+               - Severity: critical (blocks users with disabilities) | high (significant barrier) | medium (workaround exists) | low (best practice gap)
+               - WCAG criterion (e.g. 1.3.1, 2.4.7)
+               - File path and line numbers
+               - Concrete fix with code snippet showing before/after
+
+            5. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            6. **If create_issues is true**, open one GitHub issue per finding:
+               - Title: `[A11y][<severity>] <short description>`
+               - Labels: `accessibility`, `<severity>`
+               - Body: WCAG ref, file/line, impact on real users, fix snippet
+               - Skip if a matching open issue exists
+
+            7. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`:
+               - Framework detected
+               - Components reviewed (count)
+               - Findings by severity with WCAG criteria
+               - Table of issues
+
+            ## Rules
+            - Tie every finding to actual JSX/template code. No theoretical "you should use ARIA" without showing what to ARIA-ify.
+            - Don't flag third-party component libraries (e.g. shadcn/ui, Radix, Headless UI primitives) unless they're clearly used incorrectly — they handle a11y internally.
+            - Skip findings on storybook stories, test files, or example/demo folders.
+            - For Tailwind contrast issues, name the specific class pair (e.g. `text-gray-400 on bg-white`) and suggest the fix.
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Aaccessibility"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"♿ A11y audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}\"}" "$SLACK_WEBHOOK"

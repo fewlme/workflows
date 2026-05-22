@@ -1,0 +1,123 @@
+# .github/workflows/docs.yml
+name: Documentation Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      create_issues:
+        type: boolean
+        default: true
+      create_pr:
+        description: 'Open a PR with doc fixes instead of just issues'
+        type: boolean
+        default: false
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude documentation review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_args: '--max-turns 50 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
+          prompt: |
+            You are a developer experience engineer auditing the documentation of this repository.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Create issues: ${{ inputs.create_issues }}
+            - Open PR with fixes: ${{ inputs.create_pr }}
+            - GH CLI available as `gh`
+
+            ## Your task
+
+            1. **Detect the stack** (frameworks, languages, deployment target). One line.
+
+            2. **Identify what documentation exists** by listing: README.md, CHANGELOG.md, CONTRIBUTING.md, docs/, inline API docs, env example files, deployment guides, .github/ templates.
+
+            3. **Audit the README** specifically against this checklist:
+               - One-sentence project description at the top
+               - Badges (build, license, version) if applicable
+               - Quick start: how to install/run in under 5 commands
+               - Environment variables: documented with example values (not real secrets)
+               - Architecture overview if the project has >1 major component
+               - How to run tests
+               - How to deploy (or link to deploy docs)
+               - License section
+               - The README accurately reflects what the code does (no stale instructions)
+
+            4. **Audit the CHANGELOG** (if it exists):
+               - Follows Keep-a-Changelog or similar format
+               - Has entries for the last N tags/releases (run `git log --tags --simplify-by-decoration --pretty="format:%ai %d"` to find releases)
+               - Latest commits since last release are reflected in an "Unreleased" section
+
+            5. **Audit code-to-doc drift**:
+               - Run `git log --since="3 months ago" --name-only --pretty=format:` and check if recent significant changes (new endpoints, new env vars, new commands, breaking changes) are reflected in docs
+               - Find env vars used in code (`process.env.X`, `getenv('X')`, `os.environ['X']`) and cross-check against `.env.example` / README
+               - Find public API routes/endpoints and check they're documented somewhere
+
+            6. **Audit other docs**:
+               - CONTRIBUTING.md: does it exist? Does it explain the dev workflow, branch naming, commit conventions?
+               - .github/ISSUE_TEMPLATE and PULL_REQUEST_TEMPLATE
+               - Inline code docs on public APIs (JSDoc, PHPDoc, docstrings) — sample 5-10 public functions/classes and check coverage
+               - Dead links: scan markdown files for HTTP links and report obviously broken patterns (localhost, internal IPs, placeholder URLs)
+
+            7. **For each gap**, classify:
+               - **critical**: missing or stale info that blocks a new dev from running the project
+               - **high**: documented behavior contradicts actual code (drift)
+               - **medium**: useful section missing but project still usable
+               - **low**: polish (typos, formatting, badge updates)
+
+            8. **If `create_pr` is true AND fixes are mechanical** (typos, missing env vars in `.env.example`, stale command names, broken links to renamed files), actually fix them:
+               - Create a branch: `docs/auto-fix-<date>`
+               - Apply fixes
+               - Push and run `gh pr create` with title `docs: automated doc fixes <YYYY-MM-DD>` and a body listing what was changed and why
+               - Do NOT auto-fix anything that requires judgment (rewriting sections, adding new docs)
+
+            9. **For non-mechanical gaps**, if `create_issues` is true, open one GitHub issue per gap:
+               - Title: `[Docs][<severity>] <short description>`
+               - Labels: `documentation`, `<severity>`
+               - Body: what's missing/wrong, why it matters, suggested content outline
+               - Skip if a matching open issue exists
+
+            10. **Write a markdown summary** to `$GITHUB_STEP_SUMMARY`:
+                - Stack detected
+                - Doc inventory (what exists, what doesn't)
+                - Findings by severity
+                - PR opened (if any) with link
+                - Table of issues created
+
+            ## Rules
+            - Be a real developer reading this README cold — would you be able to run the project? If yes for the basic flow, README is OK.
+            - Don't suggest docs for trivial private helpers. Focus on what external users / new contributors need.
+            - Never invent content. If you suggest a section, outline it; don't write it speculatively unless it's a clearly mechanical fix.
+            - Redact any actual secrets you might find in env examples.
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Adocumentation"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"📝 Docs audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}\"}" "$SLACK_WEBHOOK"
