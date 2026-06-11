@@ -13,7 +13,7 @@ on:
         default: false
       claude_model:
         type: string
-        default: 'claude-sonnet-4-5'
+        default: 'claude-sonnet-4-6'
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -29,7 +29,7 @@ jobs:
       pull-requests: write
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
