@@ -32,6 +32,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create code-quality --color "0e8a16" --description "Code quality audit finding" --force
+          gh label create critical      --color "b60205" --description "Critical severity"            --force
+          gh label create high          --color "d93f0b" --description "High severity"                --force
+          gh label create medium        --color "fbca04" --description "Medium severity"              --force
+          gh label create low           --color "0e8a16" --description "Low severity"                 --force
+
       - name: Claude code quality review
         uses: anthropics/claude-code-action@v1
         with:
