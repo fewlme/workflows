@@ -38,6 +38,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create security --color "d93f0b" --description "Security vulnerability" --force
+          gh label create critical --color "b60205" --description "Critical severity"      --force
+          gh label create high     --color "e11d48" --description "High severity"          --force
+          gh label create medium   --color "fbca04" --description "Medium severity"        --force
+          gh label create low      --color "0e8a16" --description "Low severity"           --force
+
       - name: Detect stack
         id: stack
         run: |

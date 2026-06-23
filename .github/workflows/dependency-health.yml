@@ -26,6 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create dependencies --color "0366d6" --description "Dependency health" --force
+
       - name: Detect stack
         id: stack
         run: |
