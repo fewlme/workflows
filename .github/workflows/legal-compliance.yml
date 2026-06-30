@@ -1,0 +1,154 @@
+# .github/workflows/legal-compliance.yml
+name: Legal Compliance Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-4-6'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create legal-compliance --color "5319e7" --description "Legal / compliance audit finding" --force
+          gh label create critical          --color "b60205" --description "Critical severity"               --force
+          gh label create high              --color "d93f0b" --description "High severity"                   --force
+          gh label create medium            --color "fbca04" --description "Medium severity"                 --force
+          gh label create low               --color "0e8a16" --description "Low severity"                    --force
+
+      - name: Claude legal compliance review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob"'
+          prompt: |
+            You are a senior technical-compliance reviewer screening this repository for
+            legal and regulatory risk. You are NOT a lawyer and this is NOT legal advice —
+            you produce a triage that a human (and counsel) reviews. Be conservative and
+            evidence-based: every finding must point at real code, a real file, or a real
+            absence you can demonstrate.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
+
+            ## Your task
+
+            1. **Detect the stack and product surface** (frameworks, languages, whether
+               there is a user-facing frontend, what data it appears to handle). State it
+               in one line.
+
+            2. **Review across these four categories.** Tag every finding with one
+               category: `Privacy`, `LegalDocs`, `License`, or `Content`.
+
+               **[Privacy] Privacy & data compliance in code (GDPR/CCPA):**
+               - Collection/storage of personal data (PII): emails, names, IPs, device IDs,
+                 geolocation, payment data, health data.
+               - Missing or non-blocking consent & cookie banners; analytics/trackers
+                 (GA, Meta Pixel, etc.) firing before consent is given.
+               - Third-party data sharing without disclosure.
+               - Data-retention / right-to-erasure gaps (no deletion path, unbounded logs).
+               - Logging of sensitive data; hardcoded personal data in source or fixtures.
+
+               **[LegalDocs] Legal document presence & freshness:**
+               - Look for Privacy Policy, Terms & Conditions, Cookie Policy,
+                 Imprint / Legal Notice, EULA, and a `LICENSE` file.
+               - Flag missing required docs given the product surface (e.g. a frontend that
+                 collects data but ships no privacy policy).
+               - Flag stale `last-updated` dates and obviously dead links in legal pages.
+
+               **[License] License compliance:**
+               - Is the project's own `LICENSE` present and declared (package.json,
+                 composer.json, pyproject, etc.)?
+               - Dependency license conflicts: copyleft/GPL/AGPL contamination against the
+                 project's license, missing/unknown licenses on dependencies.
+               - This is the *legal compatibility* lens only — staleness and vulnerabilities
+                 are the dependency-health audit's job, not yours.
+
+               **[Content] Content / claims & regulatory text:**
+               - User-facing copy with risky or unsupported claims (medical, financial,
+                 "guaranteed", "100% secure").
+               - Missing required disclosures/disclaimers, age-gating, jurisdiction notices.
+               - Treat these as the LOWEST-confidence findings; always defer to counsel.
+
+            3. **For each confirmed issue**, produce:
+               - Category: Privacy | LegalDocs | License | Content
+               - Severity: critical | high | medium | low (be conservative — reserve
+                 critical/high for clear regulatory exposure like trackers before consent or
+                 GPL contamination; most documentation/content gaps are medium or low)
+               - Exact file path and line numbers, or the specific missing artifact
+               - 2-3 sentence explanation of why it matters in *this* repo
+               - A concrete remediation suggestion
+
+            4. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            5. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label legal-compliance --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[Legal][<Category>][<severity>] <short description>" --label legal-compliance --label "<severity>" --body "<body>"`
+               - The body MUST include file:line (or the missing artifact), why it matters,
+                 the suggested remediation, and this exact disclaimer line at the end:
+                 `> ⚖️ Automated screening, not legal advice — confirm with counsel before acting.`
+
+            6. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown
+               to that file with `Bash`. The summary MUST be written even if you find nothing,
+               and MUST contain:
+               - `## Legal Compliance Audit Results`
+               - Stack / product surface detected
+               - Files/directories analyzed (list them)
+               - Total findings count by category and by severity
+               - If no findings at threshold: `✅ No legal/compliance issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Category | Severity | File:Line / Artifact | Issue | GitHub Issue (link or "skipped: already open")
+               - The disclaimer line: `⚖️ Automated screening, not legal advice — confirm with counsel before acting.`
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+
+            ## Rules
+            - This is a flagging aid, not legal advice. Frame everything as "review with counsel".
+            - Be ruthless about noise. Do not invent regulatory requirements that don't apply
+              to this product surface (e.g. don't demand a cookie banner for a CLI library).
+            - Every finding must reference real evidence — a file:line or a demonstrable
+              absence. No theoretical "you might need to consider..." findings.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          STATUS: ${{ job.status }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Alegal-compliance"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Legal compliance audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}"
+          curl -X POST -H 'Content-type: application/json' --data "{\"text\":\"⚖️ ${MSG}\"}" "$SLACK_WEBHOOK"

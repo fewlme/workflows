@@ -17,6 +17,7 @@ fixes shipped here reach every project without editing each repo.
 | `accessibility.yml` | Frontend a11y review (skips if no frontend) | Fri 06:00 |
 | `dependency-health.yml` | Outdated / risky dependency report | 1st of month 06:00 |
 | `docs.yml` | Documentation gaps (optional auto-fix PR) | Thu 06:00 |
+| `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (1st 06:00) |
 
 Each audit creates issues only at or above its `severity_threshold` and labels
 them by category + severity. The labels are created automatically — see
@@ -79,8 +80,33 @@ permissions:
 - **`security-audit.yml`** → add `security-events: write`
 - **`docs.yml`** → needs `contents: write` and `pull-requests: write` (it can
   open auto-fix PRs); enable them with the `create_pr: true` input.
+- **`legal-compliance.yml`** → no extra permissions (issue-only, like
+  `code-quality.yml`). Legal surfaces churn slowly, so a **quarterly** schedule
+  keeps noise low — but the cadence is caller-controlled, set it to whatever fits:
 
-The fastest way to bootstrap is to copy the six caller files from an existing
+  ```yaml
+  name: Legal
+  on:
+    schedule:
+      - cron: '0 6 1 */3 *'   # quarterly, 1st of the month 6am
+    workflow_dispatch:
+  permissions:
+    contents: read
+    issues: write
+    pull-requests: read
+    id-token: write
+  jobs:
+    audit:
+      uses: fewlme/workflows/.github/workflows/legal-compliance.yml@v1
+      secrets:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  ```
+
+  Note: findings are a screening aid, not legal advice — every issue carries a
+  "confirm with counsel" disclaimer.
+
+The fastest way to bootstrap is to copy the caller files from an existing
 project (e.g. `bilbokidmodels`) and keep the `@v1` pins as-is.
 
 ### 3. Trigger a first run
@@ -115,6 +141,7 @@ missing, so this step is what keeps findings labelled.
 | accessibility | `accessibility` + severity |
 | dependency-health | `dependencies` |
 | docs | `documentation` + severity |
+| legal-compliance | `legal-compliance` + severity |
 
 ## Versioning (`@v1`)
 
