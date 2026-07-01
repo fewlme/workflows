@@ -39,6 +39,14 @@ jobs:
           echo "has_composer=$([ -f composer.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          # Detect the JS package manager (lockfile first, then packageManager field)
+          PM=npm
+          if   [ -f pnpm-lock.yaml ]; then PM=pnpm
+          elif [ -f yarn.lock ];      then PM=yarn
+          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' package.json; then PM=pnpm
+          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' package.json; then PM=yarn
+          fi
+          echo "node_pm=$PM" >> $GITHUB_OUTPUT
 
       - name: Setup PHP
         if: steps.stack.outputs.has_composer == 'true'
@@ -52,18 +60,39 @@ jobs:
           composer install --no-progress --no-interaction --prefer-dist || true
           composer outdated --format=json --direct > composer-outdated.json || true
 
+      # Enable corepack BEFORE setup-node so its packageManager version probe
+      # (e.g. `pnpm --version`) resolves instead of failing with "Unable to locate pnpm".
+      - name: Enable corepack
+        if: steps.stack.outputs.has_npm == 'true'
+        run: corepack enable
+
       - name: Setup Node
         if: steps.stack.outputs.has_npm == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: '20'
 
-      - name: NPM outdated
+      - name: Node outdated
         if: steps.stack.outputs.has_npm == 'true'
+        env:
+          PM: ${{ steps.stack.outputs.node_pm }}
         run: |
-          npm install --package-lock-only --ignore-scripts || true
-          npm outdated --json > npm-outdated.json || true
-          npm ls --json --all > npm-tree.json 2>/dev/null || true
+          case "$PM" in
+            pnpm)
+              pnpm install --frozen-lockfile --ignore-scripts || pnpm install --no-frozen-lockfile --ignore-scripts || true
+              pnpm outdated --format json > npm-outdated.json 2>/dev/null || pnpm outdated > npm-outdated.txt 2>/dev/null || true
+              pnpm ls --recursive --depth Infinity --json > npm-tree.json 2>/dev/null || true
+              ;;
+            yarn)
+              yarn install --immutable || yarn install || true
+              yarn outdated --json > npm-outdated.json 2>/dev/null || yarn outdated > npm-outdated.txt 2>/dev/null || true
+              ;;
+            *)
+              npm install --package-lock-only --ignore-scripts || true
+              npm outdated --json > npm-outdated.json || true
+              npm ls --json --all > npm-tree.json 2>/dev/null || true
+              ;;
+          esac
 
       - name: Setup Python
         if: steps.stack.outputs.has_python == 'true'
@@ -91,6 +120,7 @@ jobs:
 
             ## Inputs
             - `composer-outdated.json`, `npm-outdated.json`, `pip-outdated.json` (any may be missing)
+            - For pnpm/yarn projects the report may instead be `npm-outdated.txt` (plain text) — read it if the JSON is absent
             - `npm-tree.json` for transitive deps
             - Full source code
 

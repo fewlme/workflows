@@ -56,6 +56,14 @@ jobs:
           echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
           echo "has_docker=$([ -f Dockerfile ] || [ -f docker-compose.yml ] || [ -f compose.yml ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          # Detect the JS package manager (lockfile first, then packageManager field)
+          PM=npm
+          if   [ -f pnpm-lock.yaml ]; then PM=pnpm
+          elif [ -f yarn.lock ];      then PM=yarn
+          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' package.json; then PM=pnpm
+          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' package.json; then PM=yarn
+          fi
+          echo "node_pm=$PM" >> $GITHUB_OUTPUT
 
       # ---- Dependency audits ----
 
@@ -72,17 +80,35 @@ jobs:
           composer install --no-progress --no-interaction --prefer-dist || true
           composer audit --format=json > composer-audit.json || true
 
+      # Enable corepack BEFORE setup-node so its packageManager version probe
+      # (e.g. `pnpm --version`) resolves instead of failing with "Unable to locate pnpm".
+      - name: Enable corepack
+        if: steps.stack.outputs.has_npm == 'true'
+        run: corepack enable
+
       - name: Setup Node
         if: steps.stack.outputs.has_npm == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: '20'
 
-      - name: NPM audit
+      - name: Node audit
         if: steps.stack.outputs.has_npm == 'true'
+        env:
+          PM: ${{ steps.stack.outputs.node_pm }}
         run: |
-          npm install --package-lock-only --ignore-scripts || true
-          npm audit --json > npm-audit.json || true
+          case "$PM" in
+            pnpm)
+              pnpm audit --json > npm-audit.json 2>/dev/null || pnpm audit > npm-audit.txt 2>/dev/null || true
+              ;;
+            yarn)
+              yarn npm audit --all --json > npm-audit.json 2>/dev/null || yarn audit --json > npm-audit.json 2>/dev/null || true
+              ;;
+            *)
+              npm install --package-lock-only --ignore-scripts || true
+              npm audit --json > npm-audit.json || true
+              ;;
+          esac
 
       - name: Setup Python
         if: steps.stack.outputs.has_python == 'true'
@@ -144,7 +170,7 @@ jobs:
 
             Tool reports (any may be missing if the stack doesn't apply):
             - `composer-audit.json` - PHP dependency vulnerabilities
-            - `npm-audit.json` - JS/TS dependency vulnerabilities
+            - `npm-audit.json` - JS/TS dependency vulnerabilities (pnpm projects may produce `npm-audit.txt` instead — read it if the JSON is absent)
             - `pip-audit.json` - Python dependency vulnerabilities
             - `trivy-report.json` - filesystem, dependency, Docker and IaC issues
             - Gitleaks results from the previous step (check job logs / SARIF)
