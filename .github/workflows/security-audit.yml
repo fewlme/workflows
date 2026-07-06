@@ -15,7 +15,7 @@ on:
       claude_model:
         description: 'Claude model to use'
         type: string
-        default: 'claude-sonnet-4-6'
+        default: 'claude-sonnet-5'
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
