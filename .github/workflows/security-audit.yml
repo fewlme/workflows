@@ -30,11 +30,10 @@ jobs:
       issues: write
       security-events: write
       pull-requests: read
-      id-token: write
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
         with:
           fetch-depth: 0
 
@@ -69,7 +68,7 @@ jobs:
 
       - name: Setup PHP
         if: steps.stack.outputs.has_composer == 'true'
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240  # v2
         with:
           php-version: '8.3'
           tools: composer
@@ -88,7 +87,7 @@ jobs:
 
       - name: Setup Node
         if: steps.stack.outputs.has_npm == 'true'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444  # v5
         with:
           node-version: '20'
 
@@ -112,7 +111,7 @@ jobs:
 
       - name: Setup Python
         if: steps.stack.outputs.has_python == 'true'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: '3.12'
 
@@ -125,21 +124,21 @@ jobs:
       # ---- Secret + SAST scanning ----
 
       - name: Gitleaks (secrets)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
 
       - name: Semgrep (SAST)
-        uses: returntocorp/semgrep-action@v1
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # v1
         continue-on-error: true
         with:
           config: p/auto p/security-audit p/owasp-top-ten p/secrets
           generateSarif: true
 
       - name: Trivy (deps + Docker + IaC)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         continue-on-error: true
         with:
           scan-type: 'fs'
@@ -151,7 +150,7 @@ jobs:
 
       - name: Claude analysis & triage
         id: claude
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
