@@ -4,8 +4,10 @@ Reusable GitHub Actions workflows that run Claude-powered audits (code quality,
 security, performance, accessibility, dependency health, documentation) on a
 schedule and open labelled GitHub issues for findings.
 
-Consumer repos reference these workflows through the moving **`@v1`** tag, so
-fixes shipped here reach every project without editing each repo.
+Consumer repos reference these workflows by a **full commit SHA** (with `# v1` as a
+readable comment), and a per-repo **Dependabot** keeps that SHA current through
+reviewed PRs. This puts a human review gate in front of any new workflow code before
+it runs in your repo with write access — see [Versioning](#versioning).
 
 ## What's in this repo
 
@@ -52,7 +54,8 @@ gh secret set SLACK_WEBHOOK --repo <owner>/<repo>
 
 Create one small caller per audit under `.github/workflows/` in the new repo.
 They all follow the same shape — `schedule` + `workflow_dispatch`, the right
-`permissions`, and `uses: ...@v1`. Minimal example (`quality.yml`):
+`permissions`, and a **SHA-pinned** `uses:` (see [Versioning](#versioning) for how to
+get the SHA). Minimal example (`quality.yml`):
 
 ```yaml
 name: Quality
@@ -64,10 +67,9 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
-  id-token: write
 jobs:
   audit:
-    uses: fewlme/workflows/.github/workflows/code-quality.yml@v1
+    uses: fewlme/workflows/.github/workflows/code-quality.yml@<40-char-sha>  # v1
     # Pass only the secrets the reusable workflow declares — never `secrets: inherit`.
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -94,10 +96,9 @@ permissions:
     contents: read
     issues: write
     pull-requests: read
-    id-token: write
   jobs:
     audit:
-      uses: fewlme/workflows/.github/workflows/legal-compliance.yml@v1
+      uses: fewlme/workflows/.github/workflows/legal-compliance.yml@<40-char-sha>  # v1
       secrets:
         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
@@ -107,9 +108,26 @@ permissions:
   "confirm with counsel" disclaimer.
 
 The fastest way to bootstrap is to copy the caller files from an existing
-project (e.g. `bilbokidmodels`) and keep the `@v1` pins as-is.
+project (e.g. `bilbokidmodels`) and keep the SHA pins as-is — Dependabot (next step)
+bumps them for you.
 
-### 3. Trigger a first run
+### 3. Add Dependabot (required)
+
+The pins are only safe if something keeps them fresh. Add
+`.github/dependabot.yml` to the new repo so the `github-actions` ecosystem is
+watched — Dependabot then opens a reviewed PR whenever the pinned SHA falls behind
+`v1`:
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+```
+
+### 4. Trigger a first run
 
 ```bash
 gh workflow run quality.yml --repo <owner>/<repo>
@@ -143,24 +161,37 @@ missing, so this step is what keeps findings labelled.
 | docs | `documentation` + severity |
 | legal-compliance | `legal-compliance` + severity |
 
-## Versioning (`@v1`)
+## Versioning
 
-Consumers pin the moving `v1` tag, **not** a commit SHA, so a fix here lands
-everywhere on the next run. After merging a change to `master`, move the tag:
+Consumers pin a **full 40-char commit SHA**, not the moving `v1` tag, so a
+compromised or accidental push to this repo cannot execute in every consumer on the
+next run (CWE-829). The `v1` tag still exists as a human-readable "latest" marker and
+as the target Dependabot tracks — each caller writes `...@<sha>  # v1`, and Dependabot
+bumps the SHA toward `v1` via a **reviewed PR**. That PR is the security gate.
+
+**Get the SHA to pin** (the commit `v1` currently points to):
+
+```bash
+gh api repos/fewlme/workflows/commits/v1 --jq .sha
+```
+
+**Maintainers — after merging a change to `master`, move the tag** so Dependabot
+picks it up:
 
 ```bash
 git tag -f v1 <new-sha>
 git push -f origin v1
 ```
 
-Existing open issues are not retro-labelled; the change takes effect on the next
-scheduled or dispatched run.
+Consumers do **not** update instantly — they update when their Dependabot PR merges.
+Existing open issues are not retro-labelled; changes take effect on the next
+scheduled or dispatched run after a consumer repins.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `... CLAUDE_CODE_OAUTH_TOKEN ... is required` | Secret missing/empty in that repo | `gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>` |
-| Issues created without labels | Labels missing **and** running an old pin without the label-creation step | Move the repo to `@v1` |
-| A fix isn't taking effect | Consumer pinned to an old SHA | Repin to `@v1`, or move the `v1` tag |
+| Issues created without labels | Labels missing **and** running an old pin without the label-creation step | Merge the Dependabot PR (or manually repin) to the SHA `v1` points to |
+| A fix isn't taking effect | Consumer pinned to an old SHA | Merge the pending Dependabot bump, or repin to the SHA from `gh api repos/fewlme/workflows/commits/v1 --jq .sha` |
 | Audit ran but filed nothing | No findings at `severity_threshold`, or `create_issues: false` | Lower the threshold / check the run summary |
