@@ -9,7 +9,7 @@ on:
         default: true
       claude_model:
         type: string
-        default: 'claude-sonnet-4-6'
+        default: 'claude-sonnet-5'
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -68,7 +68,7 @@ jobs:
 
       - name: Setup Node
         if: steps.stack.outputs.has_npm == 'true'
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: '20'
 
