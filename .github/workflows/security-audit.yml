@@ -30,6 +30,7 @@ jobs:
       issues: write
       security-events: write
       pull-requests: read
+      id-token: write
 
     steps:
       - name: Checkout
