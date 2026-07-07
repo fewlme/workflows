@@ -67,6 +67,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
+  id-token: write        # required: claude-code-action mints its GitHub token via OIDC
 jobs:
   audit:
     uses: fewlme/workflows/.github/workflows/code-quality.yml@<40-char-sha>  # v1
@@ -96,6 +97,7 @@ permissions:
     contents: read
     issues: write
     pull-requests: read
+    id-token: write        # required: claude-code-action mints its GitHub token via OIDC
   jobs:
     audit:
       uses: fewlme/workflows/.github/workflows/legal-compliance.yml@<40-char-sha>  # v1
