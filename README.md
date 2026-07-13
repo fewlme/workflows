@@ -2,7 +2,8 @@
 
 Reusable GitHub Actions workflows that run Claude-powered audits (code quality,
 security, performance, accessibility, dependency health, documentation) on a
-schedule and open labelled GitHub issues for findings.
+schedule and open labelled GitHub issues for findings — plus a forward-looking
+R&D ideation workflow that proposes what to build next.
 
 Consumer repos reference these workflows by a **full commit SHA** (with `# v1` as a
 readable comment), and a per-repo **Dependabot** keeps that SHA current through
@@ -20,6 +21,7 @@ it runs in your repo with write access — see [Versioning](#versioning).
 | `dependency-health.yml` | Outdated / risky dependency report | 1st of month 06:00 |
 | `docs.yml` | Documentation gaps (optional auto-fix PR) | Thu 06:00 |
 | `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (1st 06:00) |
+| `rd-ideas.yml` | Forward-looking feature/R&D proposals (one curated report issue) | 15th of month 06:00 |
 
 Each audit creates issues only at or above its `severity_threshold` and labels
 them by category + severity. The labels are created automatically — see
@@ -109,6 +111,30 @@ permissions:
   Note: findings are a screening aid, not legal advice — every issue carries a
   "confirm with counsel" disclaimer.
 
+- **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
+  It scouts the codebase and the web for new-feature opportunities and files ONE
+  curated `[R&D] Ideas report` issue per run (idempotent within 30 days). A
+  monthly cadence works well, offset from `dependency-health.yml` on the 1st:
+
+  ```yaml
+  name: R&D Ideas
+  on:
+    schedule:
+      - cron: '0 6 15 * *'   # monthly, 15th 6am
+    workflow_dispatch:
+  permissions:
+    contents: read
+    issues: write
+    pull-requests: read
+    id-token: write        # required: claude-code-action mints its GitHub token via OIDC
+  jobs:
+    audit:
+      uses: fewlme/workflows/.github/workflows/rd-ideas.yml@<40-char-sha>  # v1
+      secrets:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  ```
+
 The fastest way to bootstrap is to copy the caller files from an existing
 project (e.g. `bilbokidmodels`) and keep the SHA pins as-is — Dependabot (next step)
 bumps them for you.
@@ -141,9 +167,9 @@ All audits accept these (passed under `with:` in the caller):
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
-| `severity_threshold` | string | `high` | Min severity to report. Not used by `dependency-health` / `docs`. |
+| `severity_threshold` | string | `high` | Min severity to report. Not used by `dependency-health` / `docs` / `rd-ideas`. |
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
-| `claude_model` | string | `claude-sonnet-4-6` | Model used for the audit. |
+| `claude_model` | string | `claude-sonnet-5` | Model used for the audit. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
 
 ## Issue labels
@@ -162,6 +188,7 @@ missing, so this step is what keeps findings labelled.
 | dependency-health | `dependencies` |
 | docs | `documentation` + severity |
 | legal-compliance | `legal-compliance` + severity |
+| rd-ideas | `idea` |
 
 ## Versioning
 

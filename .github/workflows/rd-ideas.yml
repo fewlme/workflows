@@ -1,0 +1,106 @@
+# .github/workflows/rd-ideas.yml
+name: R&D Ideas (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create idea --color "a2eeef" --description "R&D / feature proposal" --force
+
+      - name: Claude R&D scout
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: '--max-turns 60 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Write,WebSearch,WebFetch"'
+          prompt: |
+            You are a product-minded senior engineer scouting R&D opportunities for this repository. Your job is to propose what to build NEXT — new features, capabilities, and directions — not to report what is broken (other audits cover that).
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
+
+            ## Your task
+
+            1. **Understand the product.** Read the README, docs, entry points, routes/models/CLI commands. Write a one-paragraph statement of what this project does and for whom.
+
+            2. **Mine internal signals:**
+               - TODO / FIXME / HACK / IDEA comments in the source
+               - Half-built or feature-flagged code paths
+               - Open feature requests: `gh issue list --state open --limit 50`
+               - CHANGELOG / recent git log — where is the project heading?
+               - Obvious gaps between what the product claims to do and what the code actually supports
+
+            3. **Research externally** with WebSearch/WebFetch:
+               - Ecosystem trends for the detected stack
+               - What comparable products / competitors ship that this project lacks
+               - New capabilities in the libraries, frameworks, and platforms this project ALREADY uses that it doesn't exploit yet
+
+            4. **Check history.** Run `gh issue list --label idea --state all --search "R&D ideas report" --json number,title,createdAt --limit 5` and read the 2-3 most recent reports (`gh issue view <n>`). Do NOT re-propose ideas from those reports unless you have new evidence.
+
+            5. **Generate, then curate.** Brainstorm broadly, then select the **3-5 strongest ideas**. For each idea provide:
+               - Problem / opportunity
+               - Proposed solution sketch
+               - Evidence: the internal signal and/or external source (with URL) that motivated it
+               - Estimated effort: S / M / L
+               - Expected impact
+               - A suggested first step
+
+            6. **If create_issues is `true`** (the value above), open ONE report issue:
+               - FIRST run: `gh issue list --label idea --state open --search "R&D ideas report" --json number,createdAt` and check whether any returned issue was created in the last 30 days. If yes, skip creation (idempotent).
+               - If no recent report exists, run: `gh issue create --title "[R&D] Ideas report - $(date +%Y-%m-%d)" --label idea --body "<body>"`
+               - Body: the product one-liner, then each idea as a `### Idea: <title>` section with the fields from step 5, ending with a `- [ ] Adopt this idea` checkbox.
+
+            7. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if no ideas survive curation, and MUST contain:
+               - `## R&D Ideas Report`
+               - The product one-liner
+               - Sources consulted (internal signals + external URLs)
+               - A table of the curated ideas: title / effort / impact
+               - A link to the report issue, or "skipped: recent report already open"
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+
+            ## Rules
+            - Every idea must be grounded in evidence. Generic suggestions ("add tests", "improve docs", "refactor X") are banned — the audit workflows cover those.
+            - Never propose something already tracked as an open issue or present in a recent R&D report.
+            - Externally-inspired ideas must cite at least one URL.
+            - This is a read-only scouting run: never modify repository files.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"💡 R&D ideas report ready for *${{ github.repository }}*\n${RUN_URL}\"}" "$SLACK_WEBHOOK"
