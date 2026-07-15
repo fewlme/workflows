@@ -1,0 +1,147 @@
+# .github/workflows/ui-ux.yml
+name: UI/UX Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-5'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create ui-ux    --color "d876e3" --description "UI/UX issue"        --force
+          gh label create critical --color "b60205" --description "Critical severity"  --force
+          gh label create high     --color "e11d48" --description "High severity"      --force
+          gh label create medium   --color "fbca04" --description "Medium severity"    --force
+          gh label create low      --color "0e8a16" --description "Low severity"       --force
+
+      - name: Detect frontend stack
+        id: stack
+        run: |
+          IS_FRONTEND=false
+          if [ -f package.json ]; then
+            if grep -qE '"(next|react|vue|svelte|astro|nuxt|remix)"' package.json; then
+              IS_FRONTEND=true
+            elif grep -qE '"(tailwindcss|bootstrap|@mui/|antd|@chakra-ui|daisyui|@radix-ui|vuetify|primevue|@heroui|flowbite)' package.json; then
+              IS_FRONTEND=true
+            fi
+          fi
+          # Server-rendered apps (Laravel/Symfony) with template-driven UIs count too
+          if [ "$IS_FRONTEND" = "false" ] && [ -n "$(git ls-files '*.blade.php' '*.twig' | head -1)" ]; then
+            IS_FRONTEND=true
+          fi
+          echo "is_frontend=$IS_FRONTEND" >> $GITHUB_OUTPUT
+
+      - name: Skip if no frontend detected
+        if: steps.stack.outputs.is_frontend != 'true'
+        run: |
+          echo "## UI/UX Audit Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No frontend framework, UI library, or template layer detected. Audit runs on JS-framework projects, projects using a UI/CSS library, or server-rendered apps with Blade/Twig templates." >> $GITHUB_STEP_SUMMARY
+          exit 0
+
+      - name: Claude UI/UX review
+        if: steps.stack.outputs.is_frontend == 'true'
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Write,WebSearch,WebFetch"'
+          prompt: |
+            You are a senior product designer and frontend engineer auditing this codebase for UI/UX quality: design standards, design consistency, and whether the project makes the most of the UI library it already uses.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+            - GH CLI is authenticated and available as `gh`
+
+            ## Your task
+
+            1. **Detect the stack.** Framework (Next.js, Vue, Laravel+Blade, ...), styling approach (Tailwind, CSS modules, plain CSS, ...), and the UI library with its EXACT installed version (from package.json + lockfile, or CDN links in templates). One line each.
+
+            2. **Build a capability map** with WebSearch/WebFetch: consult the docs and changelog of the installed UI library AT THAT VERSION — which components, variants, theme/token systems, utilities, and plugins it offers. You will judge utilization against this map, not against your memory.
+
+            3. **UI library utilization review:**
+               - Hand-rolled components that duplicate library primitives (custom modal/dropdown/toast/table/pagination when the library ships one)
+               - Deprecated or legacy APIs of the library still in use
+               - Unused capabilities that would delete code: theme tokens/plugins not exploited, utilities re-implemented in custom CSS, component variants ignored in favor of manual overrides
+
+            4. **Design consistency review:**
+               - Hard-coded colors, spacing, and font sizes where theme tokens exist; ad-hoc hex values outside the palette
+               - Multiple competing implementations of the same pattern (e.g. three different button styles, mixed spacing scales)
+               - Duplicate or conflicting CSS; inconsistent breakpoint usage; dark-mode gaps where the theme supports it
+
+            5. **UX heuristics review** on the actual pages/flows:
+               - Loading, empty, and error states: present and consistent across pages
+               - Form UX: inline validation feedback, submit disabled while pending, user input preserved on error
+               - Destructive actions require confirmation; async actions give feedback (toast/spinner)
+               - Responsive behavior at standard breakpoints; adequate touch targets; navigation consistent across pages
+
+            6. **For each finding:**
+               - Severity: critical (broken or unusable flow) | high (confusing UX, or major inconsistency/duplication) | medium (noticeable inconsistency, workaround exists) | low (polish / best practice gap)
+               - Area: library-utilization | design-consistency | ux
+               - File path and line numbers
+               - Concrete fix with a before/after snippet
+               - For library-utilization findings: the docs URL proving the capability exists in the installed version
+
+            7. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            8. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label ui-ux --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[UI/UX][<severity>] <short description>" --label ui-ux --label "<severity>" --body "<body>"`
+               - Body includes area, file:line, impact on users, fix snippet, and docs URL where applicable
+
+            9. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## UI/UX Audit Results`
+               - Stack, UI library and version detected
+               - Capability-gap highlights (what the library offers that the project ignores)
+               - If no findings at threshold: `✅ No UI/UX issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | Area | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+
+            ## Rules
+            - Accessibility/WCAG findings are OUT of scope — a dedicated accessibility audit owns those. Do not duplicate them here.
+            - Tie every finding to actual code. No theoretical "you should have a design system" advice without showing where it breaks today.
+            - Don't flag the internals of third-party libraries — only how this project uses (or fails to use) them.
+            - Skip findings on test files, storybook stories, and example/demo folders.
+            - Library-utilization findings must cite a docs URL for the installed major version.
+            - This is a read-only audit: never modify repository files.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Aui-ux"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"🎨 UI/UX audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}\"}" "$SLACK_WEBHOOK"

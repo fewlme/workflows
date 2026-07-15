@@ -22,6 +22,7 @@ it runs in your repo with write access — see [Versioning](#versioning).
 | `docs.yml` | Documentation gaps (optional auto-fix PR) | Thu 06:00 |
 | `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (1st 06:00) |
 | `rd-ideas.yml` | Forward-looking feature/R&D proposals (one curated report issue) | 15th of month 06:00 |
+| `ui-ux.yml` | UI/UX standards, design consistency & UI-library utilization (skips if no frontend) | 8th of month 06:00 |
 
 Each audit creates issues only at or above its `severity_threshold` and labels
 them by category + severity. The labels are created automatically — see
@@ -111,6 +112,13 @@ permissions:
   Note: findings are a screening aid, not legal advice — every issue carries a
   "confirm with counsel" disclaimer.
 
+- **`ui-ux.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
+  Audits design consistency, UX heuristics, and whether the project makes the
+  most of the UI library it already uses (it fetches the installed version's
+  docs to judge this). Skips itself when no frontend framework, UI/CSS library,
+  or Blade/Twig template layer is detected. Suggested cadence: monthly on the
+  8th (`cron: '0 6 8 * *'`).
+
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase and the web for new-feature opportunities and files ONE
   curated `[R&D] Ideas report` issue per run (idempotent within 30 days). A
@@ -189,6 +197,7 @@ missing, so this step is what keeps findings labelled.
 | docs | `documentation` + severity |
 | legal-compliance | `legal-compliance` + severity |
 | rd-ideas | `idea` |
+| ui-ux | `ui-ux` + severity |
 
 ## Versioning
 
