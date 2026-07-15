@@ -1,0 +1,160 @@
+# .github/workflows/seo.yml
+name: SEO & AEO Audit (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      severity_threshold:
+        type: string
+        default: 'high'
+      create_issues:
+        type: boolean
+        default: true
+      claude_model:
+        type: string
+        default: 'claude-sonnet-5'
+      site_url:
+        type: string
+        default: ''
+        description: 'Optional deployed-site URL for live crawlability checks'
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: true
+      SLACK_WEBHOOK:
+        required: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      - name: Ensure issue labels exist
+        if: ${{ inputs.create_issues }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create seo      --color "0052cc" --description "SEO / AEO issue"     --force
+          gh label create critical --color "b60205" --description "Critical severity"   --force
+          gh label create high     --color "e11d48" --description "High severity"       --force
+          gh label create medium   --color "fbca04" --description "Medium severity"     --force
+          gh label create low      --color "0e8a16" --description "Low severity"        --force
+
+      - name: Detect web project
+        id: stack
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+        run: |
+          IS_WEB=false
+          # Scan every tracked package.json, not just the root: monorepo roots
+          # (pnpm/turbo/nx workspaces) declare no deps — the apps live one level down.
+          MANIFESTS=$(git ls-files '*package.json' ':!:**/node_modules/**')
+          if [ -n "$MANIFESTS" ] && echo "$MANIFESTS" | xargs grep -qlE '"(next|react|vue|svelte|astro|nuxt|remix)"[[:space:]]*:' ; then
+            IS_WEB=true
+          elif [ -n "$(git ls-files '*.blade.php' '*.twig' | head -1)" ]; then
+            IS_WEB=true
+          elif [ -n "$(git ls-files '*.html' | head -1)" ]; then
+            IS_WEB=true
+          elif [ -n "$SITE_URL" ]; then
+            # An explicit site URL always means "this is a website — audit it"
+            IS_WEB=true
+          fi
+          echo "is_web=$IS_WEB" >> $GITHUB_OUTPUT
+
+      - name: Skip if not a web project
+        if: steps.stack.outputs.is_web != 'true'
+        run: |
+          echo "## SEO & AEO Audit Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "No web framework, template layer, or HTML files detected, and no site_url provided. This audit only runs on projects that serve web pages." >> $GITHUB_STEP_SUMMARY
+          exit 0
+
+      - name: Claude SEO & AEO review
+        if: steps.stack.outputs.is_web == 'true'
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Write,WebSearch,WebFetch"'
+          prompt: |
+            You are a senior technical SEO engineer auditing this codebase for search-engine AND answer-engine readiness — how well the site serves classic crawlers (Googlebot, Bingbot) and AI answer engines (ChatGPT, Claude, Perplexity, Google AI Overviews).
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Severity threshold: ${{ inputs.severity_threshold }}
+            - Create issues: ${{ inputs.create_issues }}
+            - Site URL: ${{ inputs.site_url }} (if empty, this is a code-only audit — skip all live checks)
+            - GH CLI is authenticated and available as `gh`
+
+            ## Your task
+
+            1. **Detect the stack and rendering strategy.** Framework, and whether primary content is SSR/SSG or client-side rendered per route. Client-only rendering of primary content is itself a finding — crawlers and answer engines may see an empty shell.
+
+            2. **Refresh standards** with WebSearch: the current llms.txt spec status, the current major AI crawler user-agents (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot, ...), and current structured-data guidance. These evolve too fast to trust memory — verify before flagging.
+
+            3. **Code-level SEO audit:**
+               - Per-page `<title>` and meta description: present, unique, sane length; canonical URLs; `robots` meta; viewport
+               - robots.txt and sitemap.xml: present or generated (next-sitemap, framework route handlers), referenced in robots.txt, consistent with the actual routes
+               - Structured data: JSON-LD schema.org (Organization, Article, Product, FAQ, BreadcrumbList as applicable) — present, valid, matching the visible content
+               - Open Graph + Twitter Card tags; hreflang/i18n alternates if the site is multilingual
+               - URL hygiene: redirects for moved routes, no duplicate-content routes, meaningful slugs, custom 404 with correct status code
+               - Framework specifics (e.g. Next.js metadata API / generateMetadata vs hard-coded `<head>`)
+
+            4. **AEO audit:**
+               - `llms.txt` (and optionally `llms-full.txt`): present and accurate
+               - robots.txt policy toward AI crawlers is DELIBERATE: the major AI user-agents are explicitly allowed or denied. Silence is a finding — flag it as an unmade decision (medium at most), and do NOT presume what the right policy is.
+               - Answer-friendly content structure: question-shaped headings, concise extractable answers, FAQ/HowTo schema where the content warrants it
+               - Consistent canonical facts across pages (org name, address, contact, product claims) — answer engines punish contradictions
+               - Primary content available without JS execution, for engines that don't render
+
+            5. **Live checks — ONLY if Site URL above is non-empty** (WebFetch, read-only GETs against that origin only):
+               - Fetch `/robots.txt`, `/sitemap.xml`, `/llms.txt`, the homepage, and 2-3 key pages listed in the sitemap
+               - Verify: sitemap URLs respond and match their canonical tags; titles/meta/JSON-LD are actually present in the served HTML; primary content is in the initial HTML (not injected client-side only)
+               - Diff live state against the code: a rule present in source but absent live (or vice versa) is a deploy-drift finding
+
+            6. **For each finding:**
+               - Severity: critical (pages invisible or blocked to crawlers, noindex in production, empty client-side shell) | high (missing sitemap/canonicals/titles at scale, contradictory metadata) | medium (missing structured data or OG tags, undeclared AI-crawler policy) | low (polish: meta lengths, llms.txt absence on a small site)
+               - Area: seo | aeo | live-drift
+               - File path and line numbers (or the live URL for live findings)
+               - Concrete fix with a before/after snippet
+               - A docs URL for standards-based findings (schema.org, llms.txt spec, crawler docs)
+
+            7. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
+
+            8. **If create_issues is `true`** (the value above):
+               - For each finding, FIRST run: `gh issue list --label seo --state open --search "<exact title>"`
+               - If no match, run: `gh issue create --title "[SEO][<severity>] <short description>" --label seo --label "<severity>" --body "<body>"`
+               - Body includes area (seo/aeo/live-drift), file:line or URL, impact on discoverability, fix snippet, and docs URL where applicable
+
+            9. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you find nothing, and MUST contain:
+               - `## SEO & AEO Audit Results`
+               - Stack and rendering strategy detected
+               - Whether live checks ran (the site URL, or "code-only")
+               - If no findings at threshold: `✅ No SEO/AEO issues found at severity \`${{ inputs.severity_threshold }}\` or above`
+               - If findings: a markdown table with columns: Severity | Area | Where | Issue | GitHub Issue (link or "skipped: already open")
+               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+
+            ## Rules
+            - Performance/Core Web Vitals belong to the performance audit; alt text and semantics-for-humans belong to the accessibility audit. Do not duplicate their findings here.
+            - Tie every code finding to file:line and every live finding to a URL. No generic checklists.
+            - Live checks are read-only GET requests against the provided Site URL only — never crawl other origins, never send POST requests.
+            - This is a technical audit, not content marketing — no keyword-strategy or copywriting advice.
+            - Skip findings on test files, storybook stories, and example/demo folders.
+            - This is a read-only audit: never modify repository files.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Slack notification
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          [ -z "$SLACK_WEBHOOK" ] && exit 0
+          ISSUES_URL="${{ github.server_url }}/${{ github.repository }}/issues?q=is%3Aissue+is%3Aopen+label%3Aseo"
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"🔍 SEO & AEO audit complete for *${{ github.repository }}*\n• Issues: ${ISSUES_URL}\n• Run: ${RUN_URL}\"}" "$SLACK_WEBHOOK"

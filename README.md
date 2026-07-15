@@ -23,6 +23,7 @@ it runs in your repo with write access — see [Versioning](#versioning).
 | `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (1st 06:00) |
 | `rd-ideas.yml` | Forward-looking feature/R&D proposals (one curated report issue) | 15th of month 06:00 |
 | `ui-ux.yml` | UI/UX standards, design consistency & UI-library utilization (skips if no frontend) | 8th of month 06:00 |
+| `seo.yml` | Technical SEO + answer-engine (AEO) readiness, optional live-site checks (skips if not a web project) | 22nd of month 06:00 |
 
 Each audit creates issues only at or above its `severity_threshold` and labels
 them by category + severity. The labels are created automatically — see
@@ -119,6 +120,24 @@ permissions:
   or Blade/Twig template layer is detected. Suggested cadence: monthly on the
   8th (`cron: '0 6 8 * *'`).
 
+- **`seo.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
+  Audits technical SEO (meta, canonicals, sitemap/robots, structured data) and
+  answer-engine readiness (llms.txt, AI-crawler robots policy, extractable
+  content). Pass `site_url` to also verify the live site (robots.txt, sitemap,
+  rendered pages); without it the audit is code-only. Skips itself on
+  non-web projects. Suggested cadence: monthly on the 22nd:
+
+  ```yaml
+  jobs:
+    audit:
+      uses: fewlme/workflows/.github/workflows/seo.yml@<40-char-sha>  # v1
+      with:
+        site_url: https://example.com
+      secrets:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  ```
+
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase and the web for new-feature opportunities and files ONE
   curated `[R&D] Ideas report` issue per run (idempotent within 30 days). A
@@ -179,6 +198,7 @@ All audits accept these (passed under `with:` in the caller):
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
 | `claude_model` | string | `claude-sonnet-5` | Model used for the audit. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
+| `site_url` | string | `''` | **`seo.yml` only** — deployed-site URL enabling live robots/sitemap/rendered-page checks. |
 
 ## Issue labels
 
@@ -198,6 +218,7 @@ missing, so this step is what keeps findings labelled.
 | legal-compliance | `legal-compliance` + severity |
 | rd-ideas | `idea` |
 | ui-ux | `ui-ux` + severity |
+| seo | `seo` + severity |
 
 ## Versioning
 
