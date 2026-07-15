@@ -44,10 +44,13 @@ jobs:
         id: stack
         run: |
           IS_FRONTEND=false
-          if [ -f package.json ]; then
-            if grep -qE '"(next|react|vue|svelte|astro|nuxt|remix)"' package.json; then
+          # Scan every tracked package.json, not just the root: monorepo roots
+          # (pnpm/turbo/nx workspaces) declare no deps — the apps live one level down.
+          MANIFESTS=$(git ls-files '*package.json' ':!:**/node_modules/**')
+          if [ -n "$MANIFESTS" ]; then
+            if echo "$MANIFESTS" | xargs grep -qlE '"(next|react|vue|svelte|astro|nuxt|remix)"[[:space:]]*:' ; then
               IS_FRONTEND=true
-            elif grep -qE '"(tailwindcss|bootstrap|@mui/|antd|@chakra-ui|daisyui|@radix-ui|vuetify|primevue|@heroui|flowbite)' package.json; then
+            elif echo "$MANIFESTS" | xargs grep -qlE '"(tailwindcss|bootstrap|@mui/|antd|@chakra-ui|daisyui|@radix-ui|vuetify|primevue|@heroui|flowbite)' ; then
               IS_FRONTEND=true
             fi
           fi
