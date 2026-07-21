@@ -124,6 +124,38 @@ jobs:
 
       # ---- Secret + SAST scanning ----
 
+      # Consumer repos may ship their own .gitleaks.toml; if they do, it wins.
+      # Otherwise fall back to a shared default that extends the built-in rules
+      # with an allowlist for the generic-api-key rule's most common false
+      # positive: kebab/snake-case identifiers written as string literals
+      # (CLI option names, config keys, header names).
+      - name: Gitleaks config
+        run: |
+          if [ -f .gitleaks.toml ] || [ -f gitleaks.toml ]; then
+            echo "Using repository gitleaks config"
+            exit 0
+          fi
+          cat > "$RUNNER_TEMP/gitleaks-default.toml" <<'TOML'
+          [extend]
+          useDefault = true
+
+          [allowlist]
+          description = "Shared false-positive allowlist (fewlme/workflows security-audit)"
+          regexes = [
+            # Lowercase kebab/snake-case identifiers, optionally trailing '=' —
+            # e.g. strpos($key, 'older-than-hours='), 'content-type', 'max_retries'.
+            # Real keys are high-entropy and do not match this shape.
+            '''^[a-z][a-z0-9]{1,20}(?:[-_][a-z0-9]{1,20}){1,5}=?$''',
+          ]
+          paths = [
+            '''(^|/)(vendor|node_modules|\.venv|dist|build)/''',
+            '''(^|/)(tests?|spec|specs|fixtures?|__tests__)/''',
+            '''\.(lock|snap|map)$''',
+            '''\.min\.js$''',
+          ]
+          TOML
+          echo "GITLEAKS_CONFIG=$RUNNER_TEMP/gitleaks-default.toml" >> "$GITHUB_ENV"
+
       - name: Gitleaks (secrets)
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3
         continue-on-error: true
@@ -131,12 +163,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
 
+      # Not returntocorp/semgrep-action@v1: it accepts only
+      # [entryPoint, args, config, publishToken], so the `generateSarif` input
+      # was silently ignored and no SARIF was ever produced for Claude to read.
       - name: Semgrep (SAST)
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d  # v1
         continue-on-error: true
+        run: |
+          python3 -m pip install --quiet --disable-pip-version-check semgrep==1.170.0
+          semgrep scan \
+            --config=p/security-audit \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --sarif --output=semgrep.sarif \
+            --no-error --quiet || true
+          if [ -f semgrep.sarif ]; then
+            echo "semgrep.sarif written ($(wc -c < semgrep.sarif) bytes)"
+          else
+            echo "::warning::Semgrep produced no SARIF output"
+          fi
+
+      - name: Upload Semgrep SARIF
+        if: hashFiles('semgrep.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@0499de31b99561a6d14a36a5f662c2a54f91beee  # v4.31.2
         with:
-          config: p/auto p/security-audit p/owasp-top-ten p/secrets
-          generateSarif: true
+          sarif_file: semgrep.sarif
 
       - name: Trivy (deps + Docker + IaC)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
