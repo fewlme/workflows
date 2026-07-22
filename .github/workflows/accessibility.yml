@@ -44,10 +44,25 @@ jobs:
         id: stack
         run: |
           IS_FRONTEND=false
-          if [ -f package.json ]; then
-            if grep -qE '"(next|react|vue|svelte|astro|nuxt|remix)"' package.json; then
+          # Scan every tracked package.json, not just the root: monorepo roots
+          # (pnpm/turbo/nx workspaces) declare no deps — the apps live one level down.
+          MANIFESTS=$(git ls-files '*package.json' ':!:**/node_modules/**')
+          if [ -n "$MANIFESTS" ]; then
+            if echo "$MANIFESTS" | xargs grep -qlE '"(next|react|vue|svelte|astro|nuxt|remix)"[[:space:]]*:' ; then
+              IS_FRONTEND=true
+            elif echo "$MANIFESTS" | xargs grep -qlE '"(tailwindcss|bootstrap|@mui/|antd|@chakra-ui|daisyui|@radix-ui|vuetify|primevue|@heroui|flowbite)' ; then
               IS_FRONTEND=true
             fi
+          fi
+          # Any rendered markup is auditable for WCAG, framework or not:
+          # server-rendered templates and plain HTML count. Exclude build output,
+          # vendored code and framework placeholder pages (e.g. writable/index.html)
+          # so a backend-only repo isn't flagged as having a UI.
+          if [ "$IS_FRONTEND" = "false" ] && \
+             [ -n "$(git ls-files '*.blade.php' '*.twig' '*.erb' '*.html.heex' '*.jinja' '*.jinja2' '*.j2' '*.vue' '*.svelte' '*.html' \
+                       ':!:**/node_modules/**' ':!:**/vendor/**' ':!:**/writable/**' \
+                       ':!:**/dist/**' ':!:**/build/**' ':!:**/coverage/**' ':!:docs/**' | head -1)" ]; then
+            IS_FRONTEND=true
           fi
           echo "is_frontend=$IS_FRONTEND" >> $GITHUB_OUTPUT
 
@@ -55,7 +70,7 @@ jobs:
         if: steps.stack.outputs.is_frontend != 'true'
         run: |
           echo "## Accessibility Audit Skipped" >> $GITHUB_STEP_SUMMARY
-          echo "No frontend framework detected in package.json. Audit only runs on React/Next/Vue/Svelte/Astro/Nuxt/Remix projects." >> $GITHUB_STEP_SUMMARY
+          echo "No UI layer detected. Audit runs on JS-framework projects, projects using a UI/CSS library, or any repo containing HTML or server-rendered templates (Blade/Twig/ERB/Jinja)." >> $GITHUB_STEP_SUMMARY
           exit 0
 
       - name: Claude accessibility review
@@ -76,10 +91,11 @@ jobs:
 
             ## Your task
 
-            1. **Detect the framework** (React, Next.js, Vue, Svelte, Astro, etc.) and the styling approach (Tailwind, CSS modules, styled-components, etc.). One line.
+            1. **Detect the framework** (React, Next.js, Vue, Svelte, Astro, etc.) and the styling approach (Tailwind, CSS modules, styled-components, etc.). One line. This may be a monorepo — the UI apps often live under `apps/*`, `packages/*` or similar, not at the root. Audit every app you find, and say which ones you covered.
 
             2. **Find all UI components and pages**. Focus on:
                - Component files (`.tsx`, `.jsx`, `.vue`, `.svelte`)
+               - Server-rendered templates (`.blade.php`, `.twig`, `.erb`, `.jinja`) and plain `.html` pages, if the project uses them
                - Page/route files
                - Layout components
                - Form components especially
