@@ -23,7 +23,7 @@ it runs in your repo with write access — see [Versioning](#versioning).
 | `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (1st 06:00) |
 | `rd-ideas.yml` | Forward-looking feature/R&D proposals (one curated report issue) | 15th of month 06:00 |
 | `ui-ux.yml` | UI/UX standards, design consistency & UI-library utilization (skips if no frontend) | 8th of month 06:00 |
-| `seo.yml` | Technical SEO + answer-engine (AEO) readiness, optional live-site checks (skips if not a web project) | 22nd of month 06:00 |
+| `seo.yml` | Technical SEO + answer-engine (AEO) readiness + an editorial copy-suggestions pass (Opus), optional live-site checks (skips if not a web project) | 22nd of month 06:00 |
 
 Each audit creates issues only at or above its `severity_threshold` and labels
 them by category + severity. The labels are created automatically — see
@@ -123,8 +123,13 @@ permissions:
 - **`seo.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   Audits technical SEO (meta, canonicals, sitemap/robots, structured data) and
   answer-engine readiness (llms.txt, AI-crawler robots policy, extractable
-  content). Pass `site_url` to also verify the live site (robots.txt, sitemap,
-  rendered pages); without it the audit is code-only. Skips itself on
+  content). Alongside that technical audit it runs an **editorial copy-suggestions
+  pass** on a higher-reasoning model (Opus 4.8 by default) that files ONE
+  consolidated `[SEO][editorial]` report issue with before/after rewrites for
+  titles, meta descriptions, headings and answer text. The editorial pass is on by
+  default — disable it with `editorial: false`, or change its model with
+  `editorial_model`. Pass `site_url` to also verify the live site (robots.txt,
+  sitemap, rendered pages); without it the audit is code-only. Skips itself on
   non-web projects. Suggested cadence: monthly on the 22nd:
 
   ```yaml
@@ -199,6 +204,8 @@ All audits accept these (passed under `with:` in the caller):
 | `claude_model` | string | `claude-sonnet-5` | Model used for the audit. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
 | `site_url` | string | `''` | **`seo.yml` only** — deployed-site URL enabling live robots/sitemap/rendered-page checks. |
+| `editorial` | boolean | `true` | **`seo.yml` only** — run the editorial copy-suggestions pass (one consolidated report issue). Set `false` to skip it. |
+| `editorial_model` | string | `claude-opus-4-8` | **`seo.yml` only** — model for the editorial pass (the technical audit still uses `claude_model`). |
 
 ## Issue labels
 
@@ -218,7 +225,7 @@ missing, so this step is what keeps findings labelled.
 | legal-compliance | `legal-compliance` + severity |
 | rd-ideas | `idea` |
 | ui-ux | `ui-ux` + severity |
-| seo | `seo` + severity |
+| seo | `seo` + severity, plus `editorial` on the editorial report issue |
 
 ## Versioning
 

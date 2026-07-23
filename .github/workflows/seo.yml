@@ -13,6 +13,14 @@ on:
       claude_model:
         type: string
         default: 'claude-sonnet-5'
+      editorial_model:
+        type: string
+        default: 'claude-opus-4-8'
+        description: 'Model for the editorial suggestions pass (higher-reasoning than the technical audit)'
+      editorial:
+        type: boolean
+        default: true
+        description: 'Run the editorial copy-suggestions pass and file a consolidated report issue'
       site_url:
         type: string
         default: ''
@@ -38,7 +46,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh label create seo      --color "0052cc" --description "SEO / AEO issue"     --force
+          gh label create seo       --color "0052cc" --description "SEO / AEO issue"           --force
+          gh label create editorial --color "5319e7" --description "Editorial / copy suggestion" --force
           gh label create critical --color "b60205" --description "Critical severity"   --force
           gh label create high     --color "e11d48" --description "High severity"       --force
           gh label create medium   --color "fbca04" --description "Medium severity"     --force
@@ -141,9 +150,62 @@ jobs:
             - Performance/Core Web Vitals belong to the performance audit; alt text and semantics-for-humans belong to the accessibility audit. Do not duplicate their findings here.
             - Tie every code finding to file:line and every live finding to a URL. No generic checklists.
             - Live checks are read-only GET requests against the provided Site URL only — never crawl other origins, never send POST requests.
-            - This is a technical audit, not content marketing — no keyword-strategy or copywriting advice.
+            - This is the TECHNICAL pass: flag structural/technical issues only (presence, validity, uniqueness, correct tags). Do NOT rewrite copy — defer all title/meta/heading/answer WORDING suggestions to the editorial pass, which runs separately. Never emit keyword-strategy or keyword-stuffing advice.
             - Skip findings on test files, storybook stories, and example/demo folders.
             - This is a read-only audit: never modify repository files.
+            - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Claude editorial suggestions
+        if: steps.stack.outputs.is_web == 'true' && inputs.editorial
+        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          show_full_output: true
+          claude_args: '--max-turns 60 --model ${{ inputs.editorial_model }} --allowedTools "Bash,Read,Grep,Glob,Write,WebSearch,WebFetch"'
+          prompt: |
+            You are a senior content strategist and SEO copywriter reviewing this site's user-facing copy. Your job is EDITORIAL: propose sharper wording for titles, meta descriptions, headings and on-page answers so the content reads better for humans AND is easier for answer engines (ChatGPT, Claude, Perplexity, Google AI Overviews) to extract. A separate technical pass already covers whether tags are present/valid — you cover how they READ.
+
+            ## Context
+            - Repository: ${{ github.repository }}
+            - Create issues: ${{ inputs.create_issues }}
+            - Site URL: ${{ inputs.site_url }} (if empty, work from source copy only — skip live checks)
+            - GH CLI is authenticated and available as `gh`
+
+            ## Your task
+
+            1. **Find the real user-facing copy.** Page/route metadata (`<title>`, meta description, OG), on-page headings, hero/landing text, FAQ/help content, and the copy inside templates (`.blade.php`, `.twig`) or components. Ignore code comments, config, and machine strings.
+
+            2. **Judge and rewrite, grouped by theme.** For every suggestion give the file:line, the CURRENT copy, and a concrete BEFORE → AFTER rewrite. Themes:
+               - **Titles & meta descriptions** — make them specific, benefit-led and non-duplicated across pages. (Right length/uniqueness *as a fact* is the technical pass's job; you improve the actual words.)
+               - **Headings** — rewrite vague headings into clear, often question-shaped forms that match how people and answer engines phrase queries.
+               - **Extractable answers** — where a heading poses a question, ensure a concise 2-3 sentence answer sits directly beneath it so an answer engine can lift it verbatim. Draft that answer if it's missing.
+               - **Clarity, tone & scannability** — tighten wordy or jargon-heavy passages; prefer short lead sentences and skimmable structure.
+               - **Canonical-fact consistency** — the same org name, product claim, tagline and contact details should be phrased identically across pages; flag and reconcile drift.
+
+            3. **Curate.** Prefer the highest-impact rewrites (home page, primary landing/product pages, top FAQs) over exhaustively rewriting every string. Quality over volume.
+
+            4. **If create_issues is `true`** (the value above), open ONE consolidated report issue, idempotent within 30 days:
+               - FIRST run: `gh issue list --label editorial --state open --search "SEO editorial suggestions" --json number,createdAt` and check whether any returned issue was created in the last 30 days. If yes, skip creation (idempotent).
+               - If none is recent, run: `gh issue create --title "[SEO][editorial] Content & copy suggestions - $(date +%Y-%m-%d)" --label seo --label editorial --body "<body>"`
+               - Body: a one-line scope note, then a `### <Theme>` section per theme, each suggestion as file:line with a fenced BEFORE and AFTER block, ending with a `- [ ] Adopt these suggestions` checkbox.
+
+            5. **MANDATORY: Write a summary to `$GITHUB_STEP_SUMMARY`** by appending markdown to that file with `Write` or `Bash`. The summary MUST be written even if you propose nothing, and MUST contain:
+               - `## SEO Editorial Suggestions`
+               - The model used and whether copy came from source only or a live site
+               - If nothing to suggest: `✅ No editorial improvements worth flagging`
+               - Otherwise a table with columns: Theme | Where | Current | Suggested
+               - A link to the report issue, or `skipped: recent report already open`, or `create_issues: false — summary only`
+               - At the very end: a one-line confirmation: `Editorial pass complete. <N> issues created.`
+
+            ## Rules
+            - This pass is about WORDING and content quality — not tag presence/validity (technical pass), not performance, not accessibility/alt-text. Do not duplicate those.
+            - Every suggestion ties to a file:line (or a live URL) with a concrete before/after. No generic copywriting tips or checklists.
+            - Editorial quality, not spam: never suggest keyword-stuffing, keyword strategy, or clickbait.
+            - Skip test files, storybook stories, and example/demo folders.
+            - Live checks, if a Site URL is given, are read-only GET requests against that origin only — never POST, never crawl other origins.
+            - This is a read-only pass: never modify repository files.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
