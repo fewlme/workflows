@@ -52,16 +52,28 @@ jobs:
       - name: Detect stack
         id: stack
         run: |
-          echo "has_composer=$([ -f composer.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_docker=$([ -f Dockerfile ] || [ -f docker-compose.yml ] || [ -f compose.yml ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          # Detect the JS package manager (lockfile first, then packageManager field)
+          # Monorepos keep manifests one level down (backend/, frontend/, apps/*),
+          # so scan tracked files rather than only the repo root — a root-only check
+          # skips every dependency audit on a consolidated repo. Audit the FIRST match
+          # per ecosystem, which covers the common backend + frontend split.
+          COMPOSER=$(git ls-files '*composer.json' ':!:**/vendor/**' | head -1)
+          PKG=$(git ls-files '*package.json' ':!:**/node_modules/**' | head -1)
+          PY=$(git ls-files '*requirements.txt' '*pyproject.toml' ':!:**/vendor/**' ':!:**/node_modules/**' | head -1)
+          echo "has_composer=$([ -n "$COMPOSER" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_npm=$([ -n "$PKG" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_python=$([ -n "$PY" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_docker=$([ -n "$(git ls-files '*Dockerfile' '*docker-compose.yml' '*compose.yml' | head -1)" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          # Directory of each manifest, so the audit steps can run there
+          echo "composer_dir=$([ -n "$COMPOSER" ] && dirname "$COMPOSER" || echo .)" >> $GITHUB_OUTPUT
+          NPM_DIR=$([ -n "$PKG" ] && dirname "$PKG" || echo .)
+          echo "npm_dir=$NPM_DIR" >> $GITHUB_OUTPUT
+          echo "python_dir=$([ -n "$PY" ] && dirname "$PY" || echo .)" >> $GITHUB_OUTPUT
+          # Detect the JS package manager in the app dir (lockfile first, then packageManager field)
           PM=npm
-          if   [ -f pnpm-lock.yaml ]; then PM=pnpm
-          elif [ -f yarn.lock ];      then PM=yarn
-          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' package.json; then PM=pnpm
-          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' package.json; then PM=yarn
+          if   [ -f "$NPM_DIR/pnpm-lock.yaml" ]; then PM=pnpm
+          elif [ -f "$NPM_DIR/yarn.lock" ];      then PM=yarn
+          elif [ -f "$NPM_DIR/package.json" ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' "$NPM_DIR/package.json"; then PM=pnpm
+          elif [ -f "$NPM_DIR/package.json" ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' "$NPM_DIR/package.json"; then PM=yarn
           fi
           echo "node_pm=$PM" >> $GITHUB_OUTPUT
 
@@ -76,9 +88,10 @@ jobs:
 
       - name: Composer audit
         if: steps.stack.outputs.has_composer == 'true'
+        working-directory: ${{ steps.stack.outputs.composer_dir }}
         run: |
           composer install --no-progress --no-interaction --prefer-dist || true
-          composer audit --format=json > composer-audit.json || true
+          composer audit --format=json > "$GITHUB_WORKSPACE/composer-audit.json" || true
 
       # Enable corepack BEFORE setup-node so its packageManager version probe
       # (e.g. `pnpm --version`) resolves instead of failing with "Unable to locate pnpm".
@@ -94,19 +107,21 @@ jobs:
 
       - name: Node audit
         if: steps.stack.outputs.has_npm == 'true'
+        working-directory: ${{ steps.stack.outputs.npm_dir }}
         env:
           PM: ${{ steps.stack.outputs.node_pm }}
         run: |
+          OUT="$GITHUB_WORKSPACE"
           case "$PM" in
             pnpm)
-              pnpm audit --json > npm-audit.json 2>/dev/null || pnpm audit > npm-audit.txt 2>/dev/null || true
+              pnpm audit --json > "$OUT/npm-audit.json" 2>/dev/null || pnpm audit > "$OUT/npm-audit.txt" 2>/dev/null || true
               ;;
             yarn)
-              yarn npm audit --all --json > npm-audit.json 2>/dev/null || yarn audit --json > npm-audit.json 2>/dev/null || true
+              yarn npm audit --all --json > "$OUT/npm-audit.json" 2>/dev/null || yarn audit --json > "$OUT/npm-audit.json" 2>/dev/null || true
               ;;
             *)
               npm install --package-lock-only --ignore-scripts || true
-              npm audit --json > npm-audit.json || true
+              npm audit --json > "$OUT/npm-audit.json" || true
               ;;
           esac
 
@@ -118,9 +133,14 @@ jobs:
 
       - name: Python audit
         if: steps.stack.outputs.has_python == 'true'
+        working-directory: ${{ steps.stack.outputs.python_dir }}
         run: |
           pip install pip-audit
-          pip-audit --format=json --output=pip-audit.json || true
+          if [ -f requirements.txt ]; then
+            pip-audit -r requirements.txt --format=json --output="$GITHUB_WORKSPACE/pip-audit.json" || true
+          else
+            pip-audit --format=json --output="$GITHUB_WORKSPACE/pip-audit.json" || true
+          fi
 
       # ---- Secret + SAST scanning ----
 
@@ -280,6 +300,7 @@ jobs:
             - Be precise and skeptical. No noise, no duplicates, no theoretical issues without a concrete code reference.
             - If you cannot verify a finding against source code, lower its severity or drop it.
             - Never include actual secret values in issue bodies - redact them.
+            - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

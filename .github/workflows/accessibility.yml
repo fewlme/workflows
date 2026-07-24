@@ -175,6 +175,7 @@ jobs:
             - Don't flag third-party component libraries (e.g. shadcn/ui, Radix, Headless UI primitives) unless they're clearly used incorrectly — they handle a11y internally.
             - Skip findings on storybook stories, test files, or example/demo folders.
             - For Tailwind contrast issues, name the specific class pair (e.g. `text-gray-400 on bg-white`) and suggest the fix.
+            - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

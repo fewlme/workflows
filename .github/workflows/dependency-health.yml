@@ -36,15 +36,27 @@ jobs:
       - name: Detect stack
         id: stack
         run: |
-          echo "has_composer=$([ -f composer.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_npm=$([ -f package.json ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          echo "has_python=$([ -f requirements.txt ] || [ -f pyproject.toml ] && echo true || echo false)" >> $GITHUB_OUTPUT
-          # Detect the JS package manager (lockfile first, then packageManager field)
+          # Monorepos keep manifests one level down (backend/, frontend/, apps/*),
+          # so scan tracked files rather than only the repo root — a root-only check
+          # skips every dependency report on a consolidated repo. Report on the FIRST
+          # match per ecosystem, which covers the common backend + frontend split.
+          COMPOSER=$(git ls-files '*composer.json' ':!:**/vendor/**' | head -1)
+          PKG=$(git ls-files '*package.json' ':!:**/node_modules/**' | head -1)
+          PY=$(git ls-files '*requirements.txt' '*pyproject.toml' ':!:**/vendor/**' ':!:**/node_modules/**' | head -1)
+          echo "has_composer=$([ -n "$COMPOSER" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_npm=$([ -n "$PKG" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          echo "has_python=$([ -n "$PY" ] && echo true || echo false)" >> $GITHUB_OUTPUT
+          # Directory of each manifest, so the report steps can run there
+          echo "composer_dir=$([ -n "$COMPOSER" ] && dirname "$COMPOSER" || echo .)" >> $GITHUB_OUTPUT
+          NPM_DIR=$([ -n "$PKG" ] && dirname "$PKG" || echo .)
+          echo "npm_dir=$NPM_DIR" >> $GITHUB_OUTPUT
+          echo "python_dir=$([ -n "$PY" ] && dirname "$PY" || echo .)" >> $GITHUB_OUTPUT
+          # Detect the JS package manager in the app dir (lockfile first, then packageManager field)
           PM=npm
-          if   [ -f pnpm-lock.yaml ]; then PM=pnpm
-          elif [ -f yarn.lock ];      then PM=yarn
-          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' package.json; then PM=pnpm
-          elif [ -f package.json ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' package.json; then PM=yarn
+          if   [ -f "$NPM_DIR/pnpm-lock.yaml" ]; then PM=pnpm
+          elif [ -f "$NPM_DIR/yarn.lock" ];      then PM=yarn
+          elif [ -f "$NPM_DIR/package.json" ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"pnpm' "$NPM_DIR/package.json"; then PM=pnpm
+          elif [ -f "$NPM_DIR/package.json" ] && grep -q '"packageManager"[[:space:]]*:[[:space:]]*"yarn' "$NPM_DIR/package.json"; then PM=yarn
           fi
           echo "node_pm=$PM" >> $GITHUB_OUTPUT
 
@@ -56,9 +68,10 @@ jobs:
 
       - name: Composer outdated
         if: steps.stack.outputs.has_composer == 'true'
+        working-directory: ${{ steps.stack.outputs.composer_dir }}
         run: |
           composer install --no-progress --no-interaction --prefer-dist || true
-          composer outdated --format=json --direct > composer-outdated.json || true
+          composer outdated --format=json --direct > "$GITHUB_WORKSPACE/composer-outdated.json" || true
 
       # Enable corepack BEFORE setup-node so its packageManager version probe
       # (e.g. `pnpm --version`) resolves instead of failing with "Unable to locate pnpm".
@@ -74,23 +87,25 @@ jobs:
 
       - name: Node outdated
         if: steps.stack.outputs.has_npm == 'true'
+        working-directory: ${{ steps.stack.outputs.npm_dir }}
         env:
           PM: ${{ steps.stack.outputs.node_pm }}
         run: |
+          OUT="$GITHUB_WORKSPACE"
           case "$PM" in
             pnpm)
               pnpm install --frozen-lockfile --ignore-scripts || pnpm install --no-frozen-lockfile --ignore-scripts || true
-              pnpm outdated --format json > npm-outdated.json 2>/dev/null || pnpm outdated > npm-outdated.txt 2>/dev/null || true
-              pnpm ls --recursive --depth Infinity --json > npm-tree.json 2>/dev/null || true
+              pnpm outdated --format json > "$OUT/npm-outdated.json" 2>/dev/null || pnpm outdated > "$OUT/npm-outdated.txt" 2>/dev/null || true
+              pnpm ls --recursive --depth Infinity --json > "$OUT/npm-tree.json" 2>/dev/null || true
               ;;
             yarn)
               yarn install --immutable || yarn install || true
-              yarn outdated --json > npm-outdated.json 2>/dev/null || yarn outdated > npm-outdated.txt 2>/dev/null || true
+              yarn outdated --json > "$OUT/npm-outdated.json" 2>/dev/null || yarn outdated > "$OUT/npm-outdated.txt" 2>/dev/null || true
               ;;
             *)
               npm install --package-lock-only --ignore-scripts || true
-              npm outdated --json > npm-outdated.json || true
-              npm ls --json --all > npm-tree.json 2>/dev/null || true
+              npm outdated --json > "$OUT/npm-outdated.json" || true
+              npm ls --json --all > "$OUT/npm-tree.json" 2>/dev/null || true
               ;;
           esac
 
@@ -102,7 +117,10 @@ jobs:
 
       - name: Python outdated
         if: steps.stack.outputs.has_python == 'true'
-        run: pip list --outdated --format=json > pip-outdated.json || true
+        working-directory: ${{ steps.stack.outputs.python_dir }}
+        run: |
+          [ -f requirements.txt ] && pip install -r requirements.txt || true
+          pip list --outdated --format=json > "$GITHUB_WORKSPACE/pip-outdated.json" || true
 
       - name: Claude dependency review
         uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e  # v1
@@ -168,6 +186,7 @@ jobs:
             - Don't suggest upgrading dev-only deps unless they break the build or are abandoned.
             - For frameworks (CodeIgniter, Next.js, Laravel, React), check the project's actual usage before recommending major upgrades.
             - Never recommend blind `--latest` upgrades. Always group and explain.
+            - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

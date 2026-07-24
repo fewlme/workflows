@@ -153,6 +153,7 @@ jobs:
             - This is the TECHNICAL pass: flag structural/technical issues only (presence, validity, uniqueness, correct tags). Do NOT rewrite copy — defer all title/meta/heading/answer WORDING suggestions to the editorial pass, which runs separately. Never emit keyword-strategy or keyword-stuffing advice.
             - Skip findings on test files, storybook stories, and example/demo folders.
             - This is a read-only audit: never modify repository files.
+            - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -206,6 +207,7 @@ jobs:
             - Skip test files, storybook stories, and example/demo folders.
             - Live checks, if a Site URL is given, are read-only GET requests against that origin only — never POST, never crawl other origins.
             - This is a read-only pass: never modify repository files.
+            - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
