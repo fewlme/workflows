@@ -226,7 +226,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
-          claude_args: '--max-turns 80 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
+          claude_args: '--max-turns 160 --model ${{ inputs.claude_model }} --allowedTools "Bash,Read,Grep,Glob,Edit,Write"'
           prompt: |
             You are a senior application security engineer auditing this repository.
 
@@ -281,6 +281,7 @@ jobs:
             6. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
             7. **If create_issues is `true`** (the value above):
+               - File findings INCREMENTALLY, highest severity first — create each issue the moment you confirm the finding; do NOT batch all creation for the end. You have a bounded turn budget, and filing as you go guarantees the most serious issues are recorded even if the run is long.
                - For each finding, FIRST run: `gh issue list --label security --state open --search "<exact title>"`
                - If no match, run: `gh issue create --title "[Security][<severity>] <short description>" --label security --label "<severity>" --body "<body>"`
                - Body includes file:line, CWE, impact, suggested fix
@@ -301,6 +302,7 @@ jobs:
             - If you cannot verify a finding against source code, lower its severity or drop it.
             - Never include actual secret values in issue bodies - redact them.
             - Do ALL of the above yourself in THIS single session. Never spawn background or parallel sub-agents and then end your turn waiting on their completion — this job runs non-interactively and terminates the instant you yield, silently dropping any pending analysis, issue creation, and summary (the step still reports success: a green check with zero output). Finish everything yourself — the analysis, every issue, and the $GITHUB_STEP_SUMMARY — before your final message.
+            - Budget your turns. You have a hard turn limit and running past it fails the whole job with nothing recorded from that point on. If you delegate to sub-agents, spawn at most a few and only synchronously (wait for each result in-line). Spend analysis effort in proportion to severity, and always keep enough budget in reserve to file the remaining issues and write the summary.
             - You MUST write the summary to $GITHUB_STEP_SUMMARY before ending. This is non-negotiable.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
