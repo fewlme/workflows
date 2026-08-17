@@ -83,7 +83,7 @@ jobs:
 
       - name: Claude SEO & AEO review
         if: steps.stack.outputs.is_web == 'true'
-        uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79  # v1
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
@@ -160,7 +160,7 @@ jobs:
 
       - name: Claude editorial suggestions
         if: steps.stack.outputs.is_web == 'true' && inputs.editorial
-        uses: anthropics/claude-code-action@1623c36729ac1cd5895198cded705a287de7db79  # v1
+        uses: anthropics/claude-code-action@9d7150bc8a3dae8149739a88019d192b579ad90c  # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           show_full_output: true
