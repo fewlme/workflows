@@ -326,11 +326,11 @@ column:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
-| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. |
+| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
 | `claude_model` | string | `claude-sonnet-5` (`claude-opus-5` for `security-audit`) | Model used for the audit; `claude-sonnet-5` is also the fallback model everywhere. For large monorepos a caller can pass `claude-sonnet-5[1m]` (1M-token context). |
 | `effort` | string | `high` | Reasoning effort for the Claude session: `low`/`medium`/`high`/`xhigh`/`max`. |
-| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas`, `320` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
+| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
 | `site_url` | string | `''` | **`seo.yml` only** — deployed-site URL enabling live robots/sitemap/rendered-page checks. |
 | `editorial` | boolean | `true` | **`seo.yml` only** — run the editorial copy-suggestions pass (one consolidated report issue per month). Set `false` to skip it. |
@@ -356,7 +356,7 @@ closed.
 | Audit | Labels applied |
 |---|---|
 | code-quality | `code-quality` + `critical`/`high`/`medium`/`low` |
-| security-audit | `security` + severity |
+| security-audit | `security` + severity; `security` + `needs-validation` (no severity) on blocked findings |
 | performance | `performance` + severity |
 | accessibility | `accessibility` + severity |
 | dependency-health | `dependencies` |
@@ -489,6 +489,21 @@ manual `v1` move are the only checks left.
   session" rule in the prompts; findings are filed as soon as they are confirmed,
   highest severity first, so a run cut short by the turn cap still leaves the
   most serious issues behind.
+- **`security-audit` verdicts.** Every candidate gets one of three verdicts,
+  a model adapted from [cloudflare/security-audit-skill](https://github.com/cloudflare/security-audit-skill)
+  (MIT). **`confirmed`** means the audit traced all six elements of the evidence
+  contract in the source — who the attacker is, what they control, the control
+  that should stop them, the boundary crossed, what they reach, and the concrete
+  result — and only these carry a severity. **`needs_validation`** means a
+  specific source-grounded hypothesis is blocked on exactly one fact that is not
+  in the repository (a reverse-proxy rule, an IAM policy, a deployment-injected
+  header): the issue states the trace, the missing fact and a safe check to
+  resolve it, and carries **no severity label** — it is a blocked hypothesis, not
+  a low-confidence guess, and closing it means answering the question.
+  **`rejected`** findings are counted in the run summary and never filed. The
+  summary also opens with a coverage table marking each entry surface
+  `Covered` / `Partial` / `Not covered`, so "no findings" can be told apart from
+  "never reached".
 - **Scanner reports are artifacts.** `security-audit` and `dependency-health`
   upload their raw reports plus `tool-status.txt` as
   `<workflow>-reports-<run_id>` (30 days); that artifact is the place to look

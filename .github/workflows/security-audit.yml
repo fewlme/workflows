@@ -26,7 +26,7 @@ on:
           reported num_turns (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips
           (anthropics/claude-code-action#1795).
         type: number
-        default: 320
+        default: 400
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -58,6 +58,9 @@ jobs:
           gh label create high     --color "e11d48" --description "High severity"          --force
           gh label create medium   --color "fbca04" --description "Medium severity"        --force
           gh label create low      --color "0e8a16" --description "Low severity"           --force
+          # Unscored findings blocked on a fact that is not in the repository.
+          # gh issue create rejects the whole command if any label is missing.
+          gh label create needs-validation --color "c5def5" --description "Security finding blocked on a fact outside this repo" --force
 
       - name: Detect stack
         id: stack
@@ -288,6 +291,9 @@ jobs:
             --permission-prompts none
             --allowedTools "Bash,Read,Grep,Glob"
             --disallowedTools "Edit,Write,NotebookEdit,Bash(git push:*),Bash(gh issue close:*),Bash(gh issue edit:*),Bash(gh issue delete:*),Bash(gh api:*),Bash(gh pr:*),Bash(gh secret:*),Bash(gh repo:*),Bash(gh workflow:*),Bash(curl:*),Bash(wget:*)"
+          # The evidence contract, the confirmed/needs_validation/rejected verdict model and the
+          # severity anchors below are adapted from cloudflare/security-audit-skill (MIT), rewritten
+          # for a single non-interactive session that reviews source only and never executes target code.
           prompt: |
             You are a senior application security engineer auditing this repository.
 
@@ -313,15 +319,77 @@ jobs:
             - `results.sarif` - Gitleaks secret scan (SARIF): empty `runs[0].results` = no leaks; missing = scan did not run; `rc=2` for gitleaks in `tool-status.txt` means leaks were found
             - The full source code of the repository
 
+            ## Evidence contract
+
+            A candidate becomes a finding only when you can name all six of these from the source:
+
+            1. The lower-trust principal (who is the attacker: unauthenticated visitor, authenticated
+               user of another tenant, a dependency, a CI job, a local user).
+            2. The input or action that principal actually controls.
+            3. The control that is supposed to stop them.
+            4. The trust boundary that gets crossed.
+            5. The affected principal or resource on the other side.
+            6. The concrete result — what the attacker reads, writes, executes or bypasses.
+
+            If you cannot fill all six, it is not a finding. In particular, none of these are findings on
+            their own: a missing best practice, a guessed deployment behaviour, a generic crash with no
+            attacker-controlled consequence, or an action a principal is already authorised to perform
+            against its own data.
+
+            ## Verdicts
+
+            Give every candidate exactly one verdict.
+
+            - **`confirmed`** — the contract is fully satisfied and you traced it in the source. Gets a
+              severity.
+            - **`needs_validation`** — you have a specific, source-grounded hypothesis that is blocked on
+              exactly one fact that is not in this repository: a reverse-proxy or CDN rule, an IAM policy,
+              a deployment-injected header or environment variable, a provider setting, a WAF. Record the
+              trace you *do* have, name the missing fact precisely, and give a safe check the owner can run
+              to resolve it. **A `needs_validation` finding never gets a severity.** It is a blocked
+              hypothesis, not a low-confidence vulnerability — do not use it as a dumping ground for
+              hunches you could have checked in the source.
+            - **`rejected`** — false positive, dev-only dependency, test fixture, unreachable code, or the
+              contract does not hold. Count it, do not file it.
+
+            Deployment controls that are required but absent from the repository are genuinely unknown: do
+            not assume they are present, and do not assume they are missing. That is what
+            `needs_validation` is for.
+
+            ## Severity anchors (confirmed findings only)
+
+            - **critical** — an unauthenticated actor gains code execution, full data-store access, or
+              takeover of arbitrary accounts; or a live production secret is exposed.
+            - **high** — an actor fully defeats an explicit control with real consequences: authentication
+              bypass, cross-tenant read or write, stored script execution affecting other users,
+              authenticated code execution.
+            - **medium** — a real boundary violation with limited blast radius, uncommon preconditions, or
+              consequences confined to a narrow resource set.
+            - **low** — disclosure of non-secret internals, or an effect needing sustained effort for
+              minimal gain.
+            - **informational** — a confirmed but minimal-impact observation, useful mainly as a
+              prerequisite inside a larger finding. Always below threshold.
+
+            The high/medium discriminator: does the demonstrated result *fully defeat* an explicit control
+            for an action with real consequences, or only weaken it? Severity may never exceed the impact
+            you actually demonstrated. If you cannot state the concrete damage in one sentence, the
+            severity is lower than it feels.
+
             ## Your task
 
             1. **Detect the stack** by inspecting the repository (frameworks, languages, build system, runtime). State what you found in one line.
 
-            2. **Parse every tool report that exists** and build a unified, deduplicated list of findings.
+            2. **Parse every tool report that exists** and build a unified, deduplicated list of candidates.
 
-            3. **Validate against the actual source** - read the code to confirm each finding is exploitable in context. Discard false positives, dev-only dependencies, test fixtures, and clearly unreachable code. Be ruthless about noise.
+            3. **Validate against the actual source** - read the code and apply the evidence contract to
+               every candidate, including every tool hit. A scanner hit is a lead, not a finding: it becomes
+               `confirmed` only once you have traced all six elements. Assign a verdict to each.
 
-            4. **Manually review the code for issues the tools miss**, focusing on:
+            4. **Map the attack surface, then review it.** Before hunting, list the entry surfaces where
+               untrusted input enters (HTTP routes, webhooks, CLI/env/config, file and archive uploads,
+               message consumers, scheduled jobs, plugin and dependency load paths) and the trust boundary
+               each one sits behind. Keep that list — it is what you report as coverage in step 10. Then work
+               through it, looking for issues the tools miss:
                - Injection: SQL, NoSQL, command, template, LDAP, header injection
                - Authentication: weak password handling, broken session management, missing rate limits on auth endpoints
                - Authorization: broken access control, IDOR, missing checks on routes/APIs/resources
@@ -336,41 +404,82 @@ jobs:
                - CI/CD issues (workflow secrets exposure, `pull_request_target` misuse, unpinned actions)
                - Dependency risks beyond CVEs (abandoned packages, suspicious typosquats)
 
-            5. **For each confirmed issue**, produce:
-               - Severity, using this rubric: critical = unauthenticated RCE, auth bypass or secret exposure reachable in production; high = exploitable by an authenticated user or realistic untrusted input; medium = needs unusual preconditions; low = hardening
+            5. **For each `confirmed` finding**, produce:
+               - Severity from the anchors above
                - CWE identifier if applicable
-               - Exact file path and line numbers
+               - Exact file path and line numbers for each of the six contract elements you can point at
+               - The contract stated plainly: who, what they control, what should stop them, what they reach
                - 2-3 sentence explanation of the actual impact in *this* codebase (not a generic CWE description)
-               - A concrete code-level fix (diff or replacement snippet)
+               - A concrete code-level fix at the last trusted decision point (diff or replacement snippet)
 
-            6. **Record every confirmed finding** with a severity from the rubric and a confidence (high/medium/low). Do not drop findings for being minor at this stage.
+            6. **For each `needs_validation` finding**, produce:
+               - The source trace you have, with file:line
+               - The single missing fact, named precisely ("whether the reverse proxy strips `X-Forwarded-For`",
+                 not "depends on deployment")
+               - A safe check the owner can run to resolve it
+               - What the finding would be if the fact resolves against them — as prose, **not** as a severity
 
-            7. **File issues and summary-table rows only for findings at severity `${{ inputs.severity_threshold }}` or above.** List the rest, one line each, in a collapsed `<details><summary>Below threshold</summary>…</details>` block at the end of the summary.
+            7. **Record every finding with its verdict.** Do not drop `confirmed` findings for being minor at
+               this stage, and do not upgrade a `needs_validation` finding to `confirmed` to make it look
+               actionable.
 
-            8. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label security --state open --search "<exact title>"`
-               - If no match, run: `gh issue create --title "[Security][<severity>] <short description>" --label security --label "<severity>" --body "<body>"`
-               - Body includes file:line, CWE, impact, suggested fix
+            8. **Threshold.** `${{ inputs.severity_threshold }}` gates `confirmed` findings only. `confirmed`
+               findings below it go in a collapsed `<details><summary>Below threshold</summary>…</details>`
+               block, one line each. `needs_validation` findings carry no severity, so the threshold does not
+               apply to them — they are always reported and always filed.
+
+            9. **If create_issues is `true`** (the value above):
+               - For every issue, FIRST run: `gh issue list --label security --state open --search "<exact title>"`
+               - `confirmed` at or above threshold, if no match:
+                 `gh issue create --title "[Security][<severity>] <short description>" --label security --label "<severity>" --body "<body>"`
+                 Body includes file:line, CWE, the contract, impact, suggested fix.
+               - `needs_validation`, if no match:
+                 `gh issue create --title "[Security][needs-validation] <short description>" --label security --label needs-validation --body "<body>"`
+                 Body includes the source trace, the missing fact, and the safe check. **No severity label
+                 and no severity in the title or body** — the point of this verdict is that it is unscored.
+               - `rejected` and below-threshold `confirmed` findings are never filed.
                - Never include actual secret values in issue bodies — redact them
 
-            9. **Append a summary to `$GITHUB_STEP_SUMMARY`** before you finish — also when there are no findings — with a single Bash call (`cat >> "$GITHUB_STEP_SUMMARY" <<'EOF' … EOF`). It must contain:
-               - `## Security Audit Results`
-               - Stack detected
-               - Files/directories analyzed and tool reports parsed (list them; note any that were missing or failed)
-               - Total findings count by severity
-               - If no findings at threshold: `✅ No security issues found at severity \`${{ inputs.severity_threshold }}\` or above`
-               - If findings: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
-               - The `<details><summary>Below threshold</summary>…</details>` block from step 7
-               - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+            10. **Append a summary to `$GITHUB_STEP_SUMMARY`** before you finish — also when there are no
+                findings — with a single Bash call (`cat >> "$GITHUB_STEP_SUMMARY" <<'EOF' … EOF`). It must
+                contain, in this order:
+                - `## Security Audit Results`
+                - Stack detected
+                - Tool reports parsed (list them; note any that were missing or failed)
+                - `### Coverage` — a table with columns: Entry surface | Trust boundary | Status | Note,
+                  one row per surface from step 4, with Status one of `Covered` / `Partial` / `Not covered`
+                  and a reason for anything that is not `Covered`. Follow it with one explicit sentence
+                  naming what you did **not** examine and why (ran out of turns, no source visibility,
+                  generated or vendored code), then this line verbatim:
+                  `One pass does not exhaust this repository; absence of findings in a surface below is not proof it is safe.`
+                - Findings counted by verdict: confirmed (broken down by severity), needs_validation, rejected
+                - If no `confirmed` findings at threshold: `✅ No confirmed security issues at severity \`${{ inputs.severity_threshold }}\` or above`
+                - If there are: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+                - `### Needs validation` — a table with columns: File:Line | Hypothesis | Missing fact | GitHub Issue.
+                  Omit the section only if there are none.
+                - The `<details><summary>Below threshold</summary>…</details>` block from step 8
+                - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
+
+            ## Do not report
+
+            1. A deviation from a checklist or a hardening guide, presented as a vulnerability.
+            2. Defence-in-depth advice with no reachable boundary violation behind it.
+            3. Behaviour of a proxy, CDN, provider, browser or deployment that is not visible in this
+               repository — guessing either way. Use `needs_validation`.
+            4. Self-impact: a principal affecting only its own data or its own session.
+            5. An effect stronger than the one you actually traced (a crash reported as RCE, a reflected
+               value reported as stored XSS).
+            6. A severity on a `needs_validation` finding.
+            7. The same root cause filed more than once because it surfaces at several call sites. File the
+               root cause, list the call sites in the body.
 
             ## Rules
 
             - Be precise and skeptical. No noise, no duplicates, no theoretical issues without a concrete code reference.
-            - If you cannot verify a finding against source code, lower its severity or drop it.
             - Never include actual secret values in issue bodies - redact them.
             - When you find a candidate secret, never print its value: grep with -o and a length cap, or pipe through sed to replace the value with <redacted>. Actions logs are not redacted.
             - The Grep tool is ripgrep: no look-around or backreferences. Prefer simple patterns and several searches over one clever regex.
-            - File each confirmed issue as soon as you confirm it, highest severity first, so the most serious findings are recorded even if the run is cut short.
+            - File each issue as soon as you reach a verdict on it, highest severity first, then the `needs_validation` ones, so the most serious findings are recorded even if the run is cut short.
             - Do all of this yourself in this single session. The job ends the moment you stop; a background or parallel sub-agent that is still running is lost together with its findings. If you delegate anything, wait for the result before continuing, and never end your turn with work outstanding.
 
       - name: Run telemetry
