@@ -164,7 +164,7 @@ jobs:
 
       - name: Claude dependency review
         id: claude
-        uses: anthropics/claude-code-action@56cf60fde42f7b19c3abfd5c9c48b69a1288461f  # v1
+        uses: anthropics/claude-code-action@51db78a4b844e144f8d02425cb280435c04a3474  # v1
         env:
           # Deterministic backstop for the single-session rule in the prompt.
           CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: '1'
