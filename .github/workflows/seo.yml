@@ -30,7 +30,7 @@ on:
       editorial_model:
         description: 'Model for the editorial suggestions pass (higher-reasoning than the technical audit)'
         type: string
-        default: 'claude-opus-5'
+        default: 'claude-opus-5-5'
       editorial_max_turns:
         description: >-
           Turn cap for the editorial Claude session (same num_turns semantics as max_turns).
