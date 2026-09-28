@@ -326,6 +326,7 @@ column:
 
 | Input | Type | Default | Notes |
 |---|---|---|---|
+| `ref` | string | `''` | Branch, tag or SHA to check out and audit. Empty = the ref that triggered the caller, i.e. the default branch for `schedule` / `workflow_dispatch`. Use it to audit a non-default branch such as `preprod` — the caller must still live on the default branch, since GitHub only fires schedules from there. `docs.yml` opens its auto-fix PR against this branch. |
 | `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
 | `claude_model` | string | `claude-sonnet-5` (`claude-opus-5` for `security-audit`) | Model used for the audit; `claude-sonnet-5` is also the fallback model everywhere. For large monorepos a caller can pass `claude-sonnet-5[1m]` (1M-token context). |

@@ -4,6 +4,13 @@ name: Documentation Audit (Reusable)
 on:
   workflow_call:
     inputs:
+      ref:
+        description: >-
+          Branch, tag or SHA to audit. Empty audits the ref that triggered the caller, which for its
+          schedule / workflow_dispatch is the default branch. Set it to audit a branch that is not
+          the default one (e.g. `preprod`) — the caller itself must still live on the default branch.
+        type: string
+        default: ''
       create_issues:
         description: 'Create GitHub issues for findings'
         type: boolean
@@ -45,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false   # gh uses GH_TOKEN; claude-code-action configures its own git auth
 
@@ -137,7 +145,7 @@ jobs:
             8. **If `create_pr` is true AND fixes are mechanical** (typos, missing env vars in `.env.example`, stale command names, broken links to renamed files), actually fix them:
                - Create a branch: `docs/auto-fix-<date>`
                - Apply fixes
-               - Push and run `gh pr create` with title `docs: automated doc fixes <YYYY-MM-DD>` and a body listing what was changed and why
+               - Push and run `gh pr create --base "${{ inputs.ref || github.event.repository.default_branch }}"` (the branch you audited) with title `docs: automated doc fixes <YYYY-MM-DD>` and a body listing what was changed and why
                - Do NOT auto-fix anything that requires judgment (rewriting sections, adding new docs)
 
             9. **For non-mechanical gaps, if `create_issues` is `true`** (the value above):

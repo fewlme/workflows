@@ -4,6 +4,13 @@ name: Code Quality Audit (Reusable)
 on:
   workflow_call:
     inputs:
+      ref:
+        description: >-
+          Branch, tag or SHA to audit. Empty audits the ref that triggered the caller, which for its
+          schedule / workflow_dispatch is the default branch. Set it to audit a branch that is not
+          the default one (e.g. `preprod`) — the caller itself must still live on the default branch.
+        type: string
+        default: ''
       severity_threshold:
         description: 'Minimum severity to report (critical|high|medium|low)'
         type: string
@@ -44,6 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
           persist-credentials: false   # gh uses GH_TOKEN; claude-code-action configures its own git auth
 
