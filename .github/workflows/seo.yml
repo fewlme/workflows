@@ -135,7 +135,7 @@ jobs:
       - name: Claude SEO & AEO review
         id: claude
         if: steps.stack.outputs.is_web == 'true'
-        uses: anthropics/claude-code-action@51db78a4b844e144f8d02425cb280435c04a3474  # v1
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829  # v1
         env:
           # Deterministic backstop for the single-session rule in the prompt.
           CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: '1'
@@ -254,7 +254,7 @@ jobs:
       - name: Claude editorial suggestions
         id: claude_editorial
         if: steps.stack.outputs.is_web == 'true' && inputs.editorial
-        uses: anthropics/claude-code-action@51db78a4b844e144f8d02425cb280435c04a3474  # v1
+        uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829  # v1
         env:
           # Deterministic backstop for the single-session rule in the prompt.
           CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS: '1'
