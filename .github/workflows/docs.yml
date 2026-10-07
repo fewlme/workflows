@@ -149,7 +149,8 @@ jobs:
                - Do NOT auto-fix anything that requires judgment (rewriting sections, adding new docs)
 
             9. **For non-mechanical gaps, if `create_issues` is `true`** (the value above):
-               - For each gap, FIRST run: `gh issue list --label documentation --state open --search "<exact title>"`
+               - For each gap, FIRST run: `gh issue list --label documentation --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[Docs][<severity>] <short description>" --label documentation --label "<severity>" --body "<body>"`
                - Body: what's missing/wrong, why it matters, suggested content outline
 
@@ -159,7 +160,7 @@ jobs:
                 - Doc inventory (what exists, what doesn't)
                 - Total findings count by severity
                 - If no gaps: `✅ Documentation is in good shape`
-                - If findings: a markdown table with columns: Severity | File | Issue | GitHub Issue (link or "skipped: already open")
+                - If findings: a markdown table with columns: Severity | File | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                 - PR opened (if any) with link, or `No PR opened` if create_pr is false / no mechanical fixes applied
                 - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 

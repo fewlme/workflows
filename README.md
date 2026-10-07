@@ -177,8 +177,12 @@ no longer needed by any workflow. Per-workflow notes:
   before/after rewrites for titles, meta descriptions, headings and answer text.
   The editorial pass is on by default — disable it with `editorial: false`, change
   its model with `editorial_model`, or its turn cap with `editorial_max_turns`.
-  Pass `site_url` to also verify the live site (robots.txt, sitemap, rendered
-  pages); without it the audit is code-only. Skips itself on non-web projects.
+  Pass `site_url` to also verify the live site; without it the audit is
+  code-only. A shell step first saves the raw responses (robots.txt, sitemap,
+  llms.txt, the homepage and three sitemap pages, an `Accept: text/markdown`
+  request) and probes the homepage with AI search and training crawler
+  user-agents, so missing JSON-LD or CDN/WAF bot blocks are judged from real
+  HTML rather than WebFetch's converted output. Skips itself on non-web projects.
   Suggested cadence: monthly on the 22nd:
 
   ```yaml
@@ -353,6 +357,14 @@ GitHub App token. `dependency-health`, `rd-ideas` and the `seo` editorial pass
 file **one report per calendar month** (title suffix `- YYYY-MM`); a second run
 in the same month skips creation even when that month's report is already
 closed.
+
+The per-finding audits match on the exact issue title across open **and**
+closed issues. An open match is skipped, and so is one closed as **not
+planned**: closing a finding that way dismisses it for good, and later runs
+list it as `skipped: dismissed #<n>` instead of filing it again. A match closed
+as **completed** means the problem came back, so a new issue is filed that
+starts with `Regressed: previously closed as fixed in #<n>.` The title
+includes the severity, so a finding whose severity changes counts as new.
 
 | Audit | Labels applied |
 |---|---|

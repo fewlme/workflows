@@ -132,6 +132,62 @@ jobs:
           echo "No web framework, template layer, or HTML files detected, and no site_url provided. This audit only runs on projects that serve web pages." >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
+      - name: Probe the live site
+        # Raw responses for the live checks. WebFetch returns a converted page with <head> and <script>
+        # stripped, so it cannot prove JSON-LD, meta tags or a Link header are missing — these files can.
+        if: steps.stack.outputs.is_web == 'true' && inputs.site_url != ''
+        env:
+          SITE_URL: ${{ inputs.site_url }}
+          HOST: ${{ steps.stack.outputs.site_host }}
+        run: |
+          # Every probe appends `<probe> <target> rc=<n>` to seo-live/tool-status.txt; the step never aborts
+          # on a single failure (`cmd || rc=$?` under the default `bash -e`).
+          mkdir -p seo-live
+          : > seo-live/tool-status.txt
+          ORIGIN=$(printf '%s' "$SITE_URL" | sed -E 's|^([a-zA-Z]+://)[^@/]*@|\1|; s|^([a-zA-Z]+://[^/?#]+).*$|\1|' | tr '[:upper:]' '[:lower:]')
+          if ! printf '%s' "$ORIGIN" | grep -qE '^https?://[a-z0-9.-]+(:[0-9]+)?$' || ! printf '%s' "$HOST" | grep -qE '^[a-z0-9.-]+$'; then
+            echo "site_url is not a plain http(s) origin — live probes skipped" > seo-live/tool-status.txt
+            exit 0
+          fi
+          get() {  # $1 name, $2 url, extra curl args after — saves body + response headers
+            local name=$1 url=$2; shift 2; local rc=0
+            curl -sS -L --max-redirs 5 --max-time 20 --max-filesize 5000000 -D "seo-live/$name.headers" \
+              -o "seo-live/$name.body" -w "%{http_code} %{content_type} %{size_download}B %{url_effective}" \
+              "$@" "$url" > "seo-live/$name.status" 2>&1 || rc=$?
+            echo "$name $url rc=$rc $(cat "seo-live/$name.status")" >> seo-live/tool-status.txt
+          }
+          for f in robots.txt sitemap.xml llms.txt llms-full.txt; do get "$f" "$ORIGIN/$f"; done
+          get home "$ORIGIN/"
+          # Up to 3 same-origin pages from the sitemap (one level into a sitemap index).
+          locs() { grep -oE '<loc>[^<]+</loc>' "$1" 2>/dev/null | sed -E 's|</?loc>||g' | grep -E "^https?://$HOST([:/]|$)" || true; }
+          PAGES=$(locs seo-live/sitemap.xml.body)
+          if grep -q '<sitemapindex' seo-live/sitemap.xml.body 2>/dev/null; then
+            CHILD=$(printf '%s\n' "$PAGES" | head -1)
+            PAGES=""
+            [ -n "$CHILD" ] && get sitemap-child "$CHILD" && PAGES=$(locs seo-live/sitemap-child.body)
+          fi
+          i=0
+          for P in $(printf '%s\n' "$PAGES" | grep -vE "^https?://$HOST/?$" | head -3); do i=$((i+1)); get "page-$i" "$P"; done
+          # Markdown for agents: content negotiation on the canonical URL.
+          get home-markdown "$ORIGIN/" -H 'Accept: text/markdown'
+          # Crawler user-agent probe of the homepage: status + bytes per UA. CDNs/WAFs often block these by default.
+          : > seo-live/ua-probe.txt
+          while IFS='|' read -r label ua; do
+            rc=0
+            printf '%-18s ' "$label" >> seo-live/ua-probe.txt
+            curl -sS -o /dev/null -L --max-redirs 5 --max-time 20 -A "$ua" -w '%{http_code} %{size_download}B\n' \
+              "$ORIGIN/" >> seo-live/ua-probe.txt 2>&1 || { rc=$?; echo " (curl rc=$rc)" >> seo-live/ua-probe.txt; }
+          done <<'UAS'
+          browser|Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36
+          Googlebot|Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+          OAI-SearchBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot
+          ChatGPT-User|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; ChatGPT-User/1.0; +https://openai.com/bot
+          PerplexityBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)
+          Claude-SearchBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; Claude-SearchBot/1.0; +https://www.anthropic.com)
+          GPTBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot
+          ClaudeBot|Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)
+          UAS
+
       - name: Claude SEO & AEO review
         id: claude
         if: steps.stack.outputs.is_web == 'true'
@@ -172,7 +228,9 @@ jobs:
 
             1. **Detect the stack and rendering strategy.** Framework, and whether primary content is SSR/SSG or client-side rendered per route. Client-only rendering of primary content is itself a finding — crawlers and answer engines may see an empty shell.
 
-            2. **Refresh standards** with WebSearch: the current llms.txt spec status, the current major AI crawler user-agents (GPTBot, ClaudeBot, PerplexityBot, Google-Extended, CCBot, ...), and current structured-data guidance. These evolve too fast to trust memory — verify before flagging.
+            2. **Refresh standards** with WebSearch: the current llms.txt spec status, the current AI crawler user-agents, and current structured-data guidance. These evolve too fast to trust memory — verify before flagging. Keep the crawler classes apart, because the right policy differs:
+               - **Search / retrieval** (fetch pages to cite them in answers): OAI-SearchBot, ChatGPT-User, PerplexityBot, Claude-SearchBot, Claude-User, ...
+               - **Model training**: GPTBot, ClaudeBot, Google-Extended, CCBot, ... — blocking these is a legitimate training opt-out, NOT a visibility problem. Never flag a deliberate training block.
 
             3. **Code-level SEO audit:**
                - Per-page `<title>` and meta description: present, unique, sane length; canonical URLs; `robots` meta; viewport
@@ -184,18 +242,23 @@ jobs:
 
             4. **AEO audit:**
                - `llms.txt` (and optionally `llms-full.txt`): present and accurate
-               - robots.txt policy toward AI crawlers is DELIBERATE: the major AI user-agents are explicitly allowed or denied. Silence is a finding — flag it as an unmade decision (medium at most), and do NOT presume what the right policy is.
+               - robots.txt policy toward AI crawlers is DELIBERATE, per class (step 2): the major user-agents are explicitly allowed or denied. Silence is a finding — flag it as an unmade decision (medium at most), and do NOT presume what the right policy is. Blocking search/retrieval crawlers while wanting AI visibility is a contradiction worth flagging; blocking training crawlers is not.
                - Answer-friendly content structure: question-shaped headings, concise extractable answers, FAQ/HowTo schema where the content warrants it
                - Consistent canonical facts across pages (org name, address, contact, product claims) — answer engines punish contradictions
                - Primary content available without JS execution, for engines that don't render
+               - Markdown for agents (emerging — low at most): `llms-full.txt`; serving Markdown at the canonical URL for `Accept: text/markdown` with `Vary: Accept`; or an HTTP `Link` header pointing to a Markdown version. Do not flag WebMCP or other draft standards.
 
-            5. **Live checks — ONLY if Site URL above is non-empty** (WebFetch, read-only GETs against that origin only):
-               - Fetch `/robots.txt`, `/sitemap.xml`, `/llms.txt`, the homepage, and 2-3 key pages listed in the sitemap
-               - Verify: sitemap URLs respond and match their canonical tags; titles/meta/JSON-LD are actually present in the served HTML; primary content is in the initial HTML (not injected client-side only)
+            5. **Live checks — ONLY if Site URL above is non-empty.** A pre-step saved the raw responses in `seo-live/` (not repository code — exclude it from the code-level audit):
+               - `tool-status.txt` — one line per fetch: `<name> <url> rc=<curl rc> <status> <content-type> <bytes> <final url>`. A non-zero rc or a missing file means the probe failed, not that the resource is absent; say so instead of filing a finding.
+               - `<name>.body` + `<name>.headers` for `robots.txt`, `sitemap.xml`, `llms.txt`, `llms-full.txt`, `home`, `page-1..3` (same-origin pages from the sitemap), and `home-markdown` (the homepage requested with `Accept: text/markdown`)
+               - `ua-probe.txt` — homepage status and bytes per crawler user-agent, with a browser and a Googlebot baseline
+               Use these files as the evidence. WebFetch (that origin only) is for anything else you need, but it returns a converted page with `<head>` and `<script>` removed — NEVER conclude that JSON-LD, meta tags, canonicals or headers are missing from a WebFetch result.
+               - Verify: sitemap URLs respond and match their canonical tags; titles/meta/JSON-LD are actually present in the served HTML; primary content is in the initial HTML (not injected client-side only). JSON-LD that a CMS plugin injects client-side will be absent from the raw HTML too — check the source for that before reporting it missing.
+               - Crawler access (`ua-probe.txt`): if the browser baseline is not 200, the probe is inconclusive (the runner itself is challenged) — say so, no finding. If the Googlebot baseline is also blocked, the CDN is probably verifying bots by IP, which a spoofed user-agent cannot pass — inconclusive. Only when the browser and Googlebot get 200 but a search/retrieval crawler is blocked (403/429/503, or a far smaller challenge page) AND robots.txt allows that crawler is it a finding: the CDN/WAF blocks it without anyone deciding to (high). A block that matches a robots.txt Disallow is deliberate — not a finding.
                - Diff live state against the code: a rule present in source but absent live (or vice versa) is a deploy-drift finding
 
             6. **For each finding:**
-               - Severity: critical (pages invisible or blocked to crawlers, noindex in production, empty client-side shell) | high (missing sitemap/canonicals/titles at scale, contradictory metadata) | medium (missing structured data or OG tags, undeclared AI-crawler policy) | low (polish: meta lengths, llms.txt absence on a small site)
+               - Severity: critical (pages invisible or blocked to crawlers, noindex in production, empty client-side shell) | high (missing sitemap/canonicals/titles at scale, contradictory metadata, AI search crawlers blocked at the CDN/WAF against the robots.txt policy) | medium (missing structured data or OG tags, undeclared AI-crawler policy) | low (polish: meta lengths, llms.txt absence on a small site, no Markdown representation)
                - Area: seo | aeo | live-drift
                - File path and line numbers (or the live URL for live findings)
                - Concrete fix with a before/after snippet
@@ -204,7 +267,8 @@ jobs:
             7. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
             8. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label seo --state open --search "<exact title>"`
+               - For each finding, FIRST run: `gh issue list --label seo --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[SEO][<severity>] <short description>" --label seo --label "<severity>" --body "<body>"`
                - Body includes area (seo/aeo/live-drift), file:line or URL, impact on discoverability, fix snippet, and docs URL where applicable
 
@@ -213,7 +277,7 @@ jobs:
                - Stack and rendering strategy detected
                - Whether live checks ran (the site URL, or "code-only")
                - If no findings at threshold: `✅ No SEO/AEO issues found at severity \`${{ inputs.severity_threshold }}\` or above`
-               - If findings: a markdown table with columns: Severity | Area | Where | Issue | GitHub Issue (link or "skipped: already open")
+               - If findings: a markdown table with columns: Severity | Area | Where | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules
@@ -299,12 +363,22 @@ jobs:
 
             3. **Curate.** Prefer the highest-impact rewrites (home page, primary landing/product pages, top FAQs) over exhaustively rewriting every string. Quality over volume. Keep the report tight: at most ~12 suggestions, each with a one-line rationale, no preamble.
 
-            4. **If create_issues is `true`** (the value above), open ONE consolidated report issue, idempotent per calendar month:
+            4. **Check every AFTER before you file it.** Readers who spot machine-written copy stop trusting the claims around it, so a rewrite must not introduce these patterns (and existing copy that has them is worth a suggestion):
+               - Contrast reveal ("It's not X, it's Y." / "Not because X. Because Y.") → state Y directly, with the reason
+               - Negation list ("No setup, no templates, no waiting.") → say what does happen; keep at most one absence that matters ("No card required")
+               - Trailing pile-on (", ensuring nothing slips.") → end at the claim; give the benefit its own sentence
+               - Self-answered question ("The result? 3x faster.") and colon reveal ("The best part: it learns.") → write a normal sentence
+               - Stock openers ("In today's fast-paced world", "Whether you're X or Y", "Unlock the power of", "X, reimagined")
+               - Em dashes in titles, headings, meta descriptions and CTAs
+               - Placeholder adjectives (seamless, robust, powerful, streamline, empower) → replace with the fact they stand for
+               Fixing a tell means going back to the fact (the mechanism, number, customer or step), not swapping synonyms. Never invent a fact, figure, customer or testimonial: when a rewrite needs one the source does not give, write `[NEED: <what>]` in the AFTER block. Keep the site's register and language — a French site gets French copy.
+
+            5. **If create_issues is `true`** (the value above), open ONE consolidated report issue, idempotent per calendar month:
                - FIRST run: `gh issue list --label editorial --state all --search "in:title \"Content & copy suggestions - $(date +%Y-%m)\"" --json number,state,url` — if ANY issue is returned (open or closed), skip creation: one report per calendar month.
                - Otherwise: `gh issue create --title "[SEO][editorial] Content & copy suggestions - $(date +%Y-%m)" --label seo --label editorial --body "<body>"`
                - Body: a one-line scope note, then a `### <Theme>` section per theme, each suggestion as file:line with a fenced BEFORE and AFTER block, ending with a `- [ ] Adopt these suggestions` checkbox.
 
-            5. **Append a summary to `$GITHUB_STEP_SUMMARY`** before you finish — also when there are no findings — with a single Bash call (`cat >> "$GITHUB_STEP_SUMMARY" <<'EOF' … EOF`). It must contain:
+            6. **Append a summary to `$GITHUB_STEP_SUMMARY`** before you finish — also when there are no findings — with a single Bash call (`cat >> "$GITHUB_STEP_SUMMARY" <<'EOF' … EOF`). It must contain:
                - `## SEO Editorial Suggestions`
                - The model used and whether copy came from source only or a live site
                - If nothing to suggest: `✅ No editorial improvements worth flagging`

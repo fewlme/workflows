@@ -437,7 +437,8 @@ jobs:
                apply to them — they are always reported and always filed.
 
             9. **If create_issues is `true`** (the value above):
-               - For every issue, FIRST run: `gh issue list --label security --state open --search "<exact title>"`
+               - For every issue, FIRST run: `gh issue list --label security --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - `confirmed` at or above threshold, if no match:
                  `gh issue create --title "[Security][<severity>] <short description>" --label security --label "<severity>" --body "<body>"`
                  Body includes file:line, CWE, the contract, impact, suggested fix.
@@ -462,7 +463,7 @@ jobs:
                   `One pass does not exhaust this repository; absence of findings in a surface below is not proof it is safe.`
                 - Findings counted by verdict: confirmed (broken down by severity), needs_validation, rejected
                 - If no `confirmed` findings at threshold: `✅ No confirmed security issues at severity \`${{ inputs.severity_threshold }}\` or above`
-                - If there are: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+                - If there are: a markdown table with columns: Severity | File:Line | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                 - `### Needs validation` — a table with columns: File:Line | Hypothesis | Missing fact | GitHub Issue.
                   Omit the section only if there are none.
                 - The `<details><summary>Below threshold</summary>…</details>` block from step 8

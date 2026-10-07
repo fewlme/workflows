@@ -170,7 +170,8 @@ jobs:
             7. **Report only at severity `${{ inputs.severity_threshold }}` or above.**
 
             8. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label ui-ux --state open --search "<exact title>"`
+               - For each finding, FIRST run: `gh issue list --label ui-ux --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[UI/UX][<severity>] <short description>" --label ui-ux --label "<severity>" --body "<body>"`
                - Body includes area, file:line, impact on users, fix snippet, and docs URL where applicable
 
@@ -179,7 +180,7 @@ jobs:
                - Stack, UI library and version detected
                - Capability-gap highlights (what the library offers that the project ignores)
                - If no findings at threshold: `✅ No UI/UX issues found at severity \`${{ inputs.severity_threshold }}\` or above`
-               - If findings: a markdown table with columns: Severity | Area | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+               - If findings: a markdown table with columns: Severity | Area | File:Line | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
             ## Rules

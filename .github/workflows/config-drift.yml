@@ -383,7 +383,8 @@ jobs:
             8. **File issues and summary-table rows only for findings at severity `${{ inputs.severity_threshold }}` or above.** List the rest, one line each, in a collapsed `<details><summary>Below threshold</summary>…</details>` block at the end of the summary.
 
             9. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label config --state open --search "<exact title>"`
+               - For each finding, FIRST run: `gh issue list --label config --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[Config][<severity>] <short description>" --label config --label "<severity>" --body "<body>"`
                - Body includes file:line, why it matters (what breaks or who is blocked), and the exact key/line to add or change — key names only, never values
 
@@ -395,7 +396,7 @@ jobs:
                 - A version-skew table with columns: Runtime | Manifest | Dockerfile | CI | Verdict
                 - Tool status: which tools ran and their rc (from `tool-status.txt`), naming any that failed
                 - If no findings at threshold: `✅ No configuration drift found at severity \`${{ inputs.severity_threshold }}\` or above`
-                - If findings: a markdown table with columns: Severity | Category | File:Line | Issue | GitHub Issue (link or "skipped: already open")
+                - If findings: a markdown table with columns: Severity | Category | File:Line | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                 - The `<details><summary>Below threshold</summary>…</details>` block from step 8
                 - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 

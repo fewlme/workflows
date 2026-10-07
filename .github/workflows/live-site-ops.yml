@@ -354,7 +354,8 @@ jobs:
             8. **File issues and summary-table rows only for findings at severity `${{ inputs.severity_threshold }}` or above.** List the rest, one line each, in a collapsed `<details><summary>Below threshold</summary>…</details>` block at the end of the summary.
 
             9. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label ops --state open --search "<exact title>"`
+               - For each finding, FIRST run: `gh issue list --label ops --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[Ops][<severity>] <host>: <short description>" --label ops --label "<severity>" --body "<body>"`
                - Body includes: the host, the evidence (the relevant header line, DNS record or date — one line, not a dump), whether it is never-configured or deploy drift, the exact fix (the header line to add, the DNS record to publish, the renewal action), and the code file to change when it is drift.
 
@@ -366,7 +367,7 @@ jobs:
                 - Tool status: which probes ran and which failed (probe, host, rc)
                 - Total findings count by severity
                 - If no findings at threshold: `✅ No live site operations issues found at severity \`${{ inputs.severity_threshold }}\` or above`
-                - If findings: a markdown table with columns: Severity | Host | Check | Evidence | Never configured / Drift | GitHub Issue (link or "skipped: already open")
+                - If findings: a markdown table with columns: Severity | Host | Check | Evidence | Never configured / Drift | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                 - The collapsed `Below threshold` block from step 8
                 - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
 
