@@ -22,7 +22,7 @@ on:
       claude_model:
         description: 'Claude model to use'
         type: string
-        default: 'claude-sonnet-5'
+        default: 'claude-sonnet-5-5'
       effort:
         description: 'Reasoning effort for the Claude session (low|medium|high|xhigh|max)'
         type: string
@@ -293,7 +293,7 @@ jobs:
           claude_args: |
             --max-turns ${{ inputs.max_turns }}
             --model ${{ inputs.claude_model }}
-            --fallback-model claude-sonnet-5
+            --fallback-model claude-sonnet-5-5
             --effort ${{ inputs.effort }}
             --permission-mode dontAsk
             --permission-prompts none

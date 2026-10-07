@@ -293,7 +293,7 @@ jobs:
           claude_args: |
             --max-turns ${{ inputs.max_turns }}
             --model ${{ inputs.claude_model }}
-            --fallback-model claude-sonnet-5
+            --fallback-model claude-sonnet-5-5
             --effort ${{ inputs.effort }}
             --permission-mode dontAsk
             --permission-prompts none
