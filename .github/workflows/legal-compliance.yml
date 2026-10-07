@@ -187,7 +187,8 @@ jobs:
             5. **File issues and summary-table rows only for findings at severity `${{ inputs.severity_threshold }}` or above.** List the rest, one line each, in a collapsed `<details><summary>Below threshold</summary>…</details>` block at the end of the summary.
 
             6. **If create_issues is `true`** (the value above):
-               - For each finding, FIRST run: `gh issue list --label legal-compliance --state open --search "<exact title>"`
+               - For each finding, FIRST run: `gh issue list --label legal-compliance --state all --search "in:title \"<exact title>\"" --json number,state,stateReason,title,url`
+               - A match is a returned issue whose title equals yours exactly (the search is fuzzy). Skip creation when the match is OPEN, or CLOSED with `stateReason` `NOT_PLANNED` — a human dismissed it; never re-file it. A match CLOSED as `COMPLETED` means the problem came back: treat it as no match and start the body with `Regressed: previously closed as fixed in #<n>.`
                - If no match, run: `gh issue create --title "[Legal][<Category>][<severity>] <short description>" --label legal-compliance --label "<severity>" --body "<body>"`
                - The body MUST include file:line (or the missing artifact), why it matters,
                  the suggested remediation, and this exact disclaimer line at the end:
@@ -199,7 +200,7 @@ jobs:
                - Files/directories analyzed (list them)
                - Total findings count by category and by severity
                - If no findings at threshold: `✅ No legal/compliance issues found at severity \`${{ inputs.severity_threshold }}\` or above`
-               - If findings: a markdown table with columns: Category | Severity | File:Line / Artifact | Issue | GitHub Issue (link or "skipped: already open")
+               - If findings: a markdown table with columns: Category | Severity | File:Line / Artifact | Issue | GitHub Issue (link or "skipped: already open" / "skipped: dismissed #<n>")
                - The disclaimer line: `⚖️ Automated screening, not legal advice — confirm with counsel before acting.`
                - The `<details><summary>Below threshold</summary>…</details>` block from step 5
                - At the very end: a one-line confirmation: `Audit complete. <N> issues created.`
