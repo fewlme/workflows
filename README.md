@@ -2,10 +2,10 @@
 
 Reusable GitHub Actions workflows that run Claude-powered audits (code quality,
 security, performance, accessibility, dependency health, documentation, legal
-compliance, UI/UX, SEO, configuration drift, live-site operations) on a
-schedule and open labelled GitHub issues for findings — plus a forward-looking
-R&D ideation workflow that proposes what to build next. Twelve workflows in
-total.
+compliance, UI/UX, SEO, configuration drift, live-site operations, analytics
+tracking) on a schedule and open labelled GitHub issues for findings — plus a
+forward-looking R&D ideation workflow that proposes what to build next.
+Thirteen workflows in total.
 
 Consumer repos reference these workflows by a **full commit SHA** (with `# v1` as a
 readable comment), and a per-repo **Dependabot** keeps that SHA current. The
@@ -28,6 +28,7 @@ see [Versioning](#versioning).
 | `seo.yml` | Technical SEO + answer-engine (AEO) readiness + an editorial copy-suggestions pass (Opus), optional live-site checks (skips if not a web project) | 22nd of month 06:00 |
 | `config-drift.yml` | Drift between code, committed env examples, compose files, Dockerfiles and CI: missing/dead env keys, compose validity, hadolint, Node/PHP version skew (skips if no config surface) | 5th of month 06:00 |
 | `live-site-ops.yml` | Live scan of the hosts in `site_urls`: availability/redirects, security headers vs code, TLS certificate, SPF/DMARC/CAA/DNSSEC, domain expiry (skips if no URL given) | Sun 05:37 |
+| `tracking-qa.yml` | Analytics & conversion tracking QA: duplicate tags, untracked or click-time conversions, double counting, PII in events, attribution lost on redirects, tracking-plan drift; optional live tag/CSP check (skips if no analytics code) | 12th of month 06:00 |
 
 The schedules above are examples — every consumer shares one Claude
 subscription, so offset them per repo (see [Scheduling](#scheduling)).
@@ -192,6 +193,32 @@ no longer needed by any workflow. Per-workflow notes:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   ```
 
+- **`tracking-qa.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
+  Audits the analytics that is already in the code: which tags and IDs load
+  where, whether each key conversion (signup, lead form, booking, purchase)
+  fires on success rather than on click, double counting, PII in event
+  payloads, campaign parameters lost on redirects, and cross-domain gaps. The
+  run summary always includes a conversion coverage table. A deterministic
+  `git grep` inventory runs first, and the job skips itself when it finds no
+  analytics tag, SDK or server-side conversion API. Pass `site_url` to also
+  check that the tags load on the served homepage, that the CSP allows them,
+  and that `utm_*`/`gclid` survive the redirect chain. Pass `tracking_plan`
+  (a repo path) to diff the code against your tracking plan; without it, a
+  tracked file named `*tracking-plan*` / `*tracking_plan*` is used if one
+  exists. Trackers firing before consent stay with `legal-compliance.yml`.
+  Suggested cadence: monthly on the 12th:
+
+  ```yaml
+  jobs:
+    audit:
+      uses: fewlme/workflows/.github/workflows/tracking-qa.yml@<40-char-sha>  # v1
+      with:
+        site_url: https://example.com
+      secrets:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  ```
+
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase, the git history and the web for new-feature
   opportunities and files ONE curated `[R&D] Ideas report - <YYYY-MM>` issue per
@@ -313,8 +340,8 @@ repo — stagger them:
   `17 6 * * 1`, `17 12 * * 1` and `17 18 * * 1` in three repos rather than
   three copies of `0 7 * * 1`.
 - Keep the monthly reports (`dependency-health` on the 1st, `config-drift` on
-  the 5th, `ui-ux` on the 8th, `rd-ideas` on the 15th, `seo` on the 22nd) on
-  different days, and put the quarterly legal audit on the 3rd.
+  the 5th, `ui-ux` on the 8th, `tracking-qa` on the 12th, `rd-ideas` on the 15th,
+  `seo` on the 22nd) on different days, and put the quarterly legal audit on the 3rd.
 - Cron runs in UTC by default; set `on.schedule[].timezone` (e.g.
   `timezone: Europe/Paris`) on a schedule entry if you want local time.
 
@@ -327,13 +354,14 @@ column:
 | Input | Type | Default | Notes |
 |---|---|---|---|
 | `ref` | string | `''` | Branch, tag or SHA to check out and audit. Empty = the ref that triggered the caller, i.e. the default branch for `schedule` / `workflow_dispatch`. Use it to audit a non-default branch such as `preprod` — the caller must still live on the default branch, since GitHub only fires schedules from there. `docs.yml` opens its auto-fix PR against this branch. |
-| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
+| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops` / `tracking-qa`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
 | `claude_model` | string | `claude-sonnet-5` (`claude-opus-5` for `security-audit`) | Model used for the audit; `claude-sonnet-5` is also the fallback model everywhere. For large monorepos a caller can pass `claude-sonnet-5[1m]` (1M-token context). |
 | `effort` | string | `high` | Reasoning effort for the Claude session: `low`/`medium`/`high`/`xhigh`/`max`. |
-| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
+| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas` / `tracking-qa`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
-| `site_url` | string | `''` | **`seo.yml` only** — deployed-site URL enabling live robots/sitemap/rendered-page checks. |
+| `site_url` | string | `''` | **`seo.yml` and `tracking-qa.yml`** — deployed-site URL. `seo`: live robots/sitemap/rendered-page checks. `tracking-qa`: tags on the served homepage, CSP, and campaign parameters through the redirect chain. |
+| `tracking_plan` | string | `''` | **`tracking-qa.yml` only** — repo path to a tracking plan to diff the code against. Empty = auto-detect a tracked `*tracking-plan*` / `*tracking_plan*` file. |
 | `editorial` | boolean | `true` | **`seo.yml` only** — run the editorial copy-suggestions pass (one consolidated report issue per month). Set `false` to skip it. |
 | `editorial_model` | string | `claude-opus-5` | **`seo.yml` only** — model for the editorial pass (the technical audit still uses `claude_model`). |
 | `editorial_max_turns` | number | `180` | **`seo.yml` only** — turn cap for the editorial Claude session (same `num_turns` semantics as `max_turns`). |
@@ -368,6 +396,7 @@ closed.
 | seo | `seo` + severity, plus `editorial` on the editorial report issue |
 | config-drift | `config` + severity |
 | live-site-ops | `ops` + severity |
+| tracking-qa | `tracking` + severity |
 
 ## Versioning
 
