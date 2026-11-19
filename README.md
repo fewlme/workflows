@@ -23,7 +23,7 @@ see [Versioning](#versioning).
 | `dependency-health.yml` | Outdated / risky dependency report (one issue per calendar month) | 1st of month 06:00 |
 | `docs.yml` | Documentation gaps (optional auto-fix PR) | Thu 06:00 |
 | `legal-compliance.yml` | Privacy/GDPR, legal-doc presence, license & content compliance | Quarterly (3rd 06:00) |
-| `rd-ideas.yml` | Forward-looking feature/R&D proposals (one curated report issue per calendar month) | 15th of month 06:00 |
+| `rd-ideas.yml` | Forward-looking feature/R&D proposals (3-5 curated ideas, one issue each, one batch per calendar month) | 15th of month 06:00 |
 | `ui-ux.yml` | UI/UX standards, design consistency & UI-library utilization (skips if no frontend) | 8th of month 06:00 |
 | `seo.yml` | Technical SEO + answer-engine (AEO) readiness + an editorial copy-suggestions pass (Opus), optional live-site checks (skips if not a web project) | 22nd of month 06:00 |
 | `config-drift.yml` | Drift between code, committed env examples, compose files, Dockerfiles and CI: missing/dead env keys, compose validity, hadolint, Node/PHP version skew (skips if no config surface) | 5th of month 06:00 |
@@ -34,9 +34,10 @@ The schedules above are examples — every consumer shares one Claude
 subscription, so offset them per repo (see [Scheduling](#scheduling)).
 
 Per-finding audits create issues only at or above their `severity_threshold`
-and label them by category + severity; the three report workflows
-(`dependency-health`, `rd-ideas`, the `seo` editorial pass) file one report
-issue per calendar month. The labels are created automatically — see
+and label them by category + severity; the two report workflows
+(`dependency-health`, the `seo` editorial pass) file one report issue per
+calendar month, and `rd-ideas` files one batch of per-idea issues per calendar
+month. The labels are created automatically — see
 [Issue labels](#issue-labels).
 
 ## Setting up a new project
@@ -225,9 +226,12 @@ no longer needed by any workflow. Per-workflow notes:
 
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase, the git history and the web for new-feature
-  opportunities and files ONE curated `[R&D] Ideas report - <YYYY-MM>` issue per
-  calendar month (a second run in the same month skips creation, even if the
-  report was closed). A monthly cadence works well, offset from
+  opportunities, curates the 3-5 strongest and files each as its own
+  `[R&D] <idea title>` issue, so every idea can be discussed, assigned or
+  closed on its own. Close an idea as **not planned** to reject it: later runs
+  read every `idea` issue (open or closed) and never re-propose one. Only one
+  batch is filed per calendar month (a second run in the same month creates
+  nothing, even if that month's ideas were closed). A monthly cadence works well, offset from
   `dependency-health.yml` on the 1st:
 
   ```yaml
@@ -381,10 +385,12 @@ missing, so this step is what keeps findings labelled.
 
 Issues are authored by **`github-actions[bot]`**: the Claude step runs `gh`
 on the job token (scoped by the caller's `permissions:`), not on a Claude
-GitHub App token. `dependency-health`, `rd-ideas` and the `seo` editorial pass
-file **one report per calendar month** (title suffix `- YYYY-MM`); a second run
-in the same month skips creation even when that month's report is already
-closed.
+GitHub App token. `dependency-health` and the `seo` editorial pass file **one
+report per calendar month** (title suffix `- YYYY-MM`); a second run in the
+same month skips creation even when that month's report is already closed.
+`rd-ideas` files **one issue per idea**, one batch per calendar month, and
+matches new ideas against every past `idea` issue by meaning rather than exact
+title.
 
 The per-finding audits match on the exact issue title across open **and**
 closed issues. An open match is skipped, and so is one closed as **not
