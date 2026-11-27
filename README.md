@@ -515,8 +515,9 @@ missing, so this step is what keeps findings labelled.
 Issues are authored by **`github-actions[bot]`**: the Claude step runs `gh`
 on the job token (scoped by the caller's `permissions:`), not on a Claude
 GitHub App token. `dependency-health`, the `seo` editorial pass, `conversion` and
-`backlog-groom` file **one report per calendar month** (title suffix `- YYYY-MM`); a second run in the
-same month skips creation even when that month's report is already closed.
+`backlog-groom` file **one report per calendar month** (title suffix
+`- YYYY-MM`); a second run in the same month skips creation even when that
+month's report is already closed.
 `rd-ideas` files **one issue per idea**, one batch per calendar month, and
 matches new ideas against every past `idea` issue by meaning rather than exact
 title.
