@@ -5,8 +5,9 @@ security, performance, accessibility, dependency health, documentation, legal
 compliance, UI/UX, SEO, configuration drift, live-site operations, analytics
 tracking, transactional email, help content, supportability) on a schedule and
 open labelled GitHub issues for findings — plus a forward-looking R&D ideation
-workflow that proposes what to build next and a monthly conversion review.
-Seventeen workflows in total.
+workflow that proposes what to build next, a monthly conversion review, and a
+monthly backlog grooming pass that checks which open findings are already
+fixed. Eighteen workflows in total.
 
 Consumer repos reference these workflows by a **full commit SHA** (with `# v1` as a
 readable comment), and a per-repo **Dependabot** keeps that SHA current. The
@@ -34,14 +35,15 @@ see [Versioning](#versioning).
 | `help-content.yml` | End-user help content (FAQ, help centre, onboarding, guides) vs the real product: contradicted steps, limits, prices and terms, stale references, uncovered core flows with a draft entry (skips if no help content) | Quarterly (20th 06:00) |
 | `supportability.yml` | What will generate support requests: unhelpful or leaking error messages, silent failures, self-service gaps, dead ends, missing correlation IDs and staff tooling (skips if no UI and no routes) | Quarterly (24th 06:00) |
 | `conversion.yml` | Conversion (CRO) review of signup, pricing, checkout and lead forms: 5-8 ranked recommendations with hypothesis, before/after and how to measure, one report issue per calendar month; optional live-page probes (skips if no UI layer, or no form and no conversion page) | 26th of month 06:00 |
+| `backlog-groom.yml` | Backlog hygiene: re-checks open issues against the current code (still present / appears fixed / obsolete, with the fixing commit), flags duplicates, stale and mislabelled issues, one report issue per calendar month plus one evidence comment per resolved issue — never closes anything (skips if no open issue) | 28th of month 06:00 |
 
 The schedules above are examples — every consumer shares one Claude
 subscription, so offset them per repo (see [Scheduling](#scheduling)).
 
 Per-finding audits create issues only at or above their `severity_threshold`
-and label them by category + severity; the three report workflows
-(`dependency-health`, the `seo` editorial pass, `conversion`) file one report
-issue per calendar month, and `rd-ideas` files one batch of per-idea issues per calendar
+and label them by category + severity; the four report workflows
+(`dependency-health`, the `seo` editorial pass, `conversion`, `backlog-groom`)
+file one report issue per calendar month, and `rd-ideas` files one batch of per-idea issues per calendar
 month. The labels are created automatically — see
 [Issue labels](#issue-labels).
 
@@ -299,6 +301,55 @@ no longer needed by any workflow. Per-workflow notes:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   ```
 
+- **`backlog-groom.yml`** → no extra permissions (`issues: write` covers the
+  comments). The audits file issues every week; this pass keeps the backlog
+  honest. A shell step dumps the open issues (report, `idea` and
+  `dependencies` issues are left out), then Claude re-checks up to
+  `max_issues` of them against the code and gives each a verdict: `still
+  present`, `appears fixed`, `obsolete` or `cannot verify`. `appears fixed`
+  requires both the current file:line and the commit that changed it. It also
+  flags duplicates, issues untouched for 90 days and label problems, and
+  files ONE `[Backlog] Grooming report - YYYY-MM` issue with those tables, a
+  block of ready-to-paste `gh issue close` commands for you to review, and a
+  per-label opened/closed table for the last 30 days (computed in shell, not
+  by the model).
+
+  It **never closes, edits or relabels** an issue. With `comment: true` (the
+  default) it posts one evidence comment on each issue that looks fixed or
+  obsolete; the comment carries a `<!-- backlog-groom -->` marker, and an
+  issue that already has it is never commented again. Reply on the issue if
+  the fix is incomplete: later reports list it as kept open instead of
+  recommending the close. `create_issues: false` is a full dry run — no
+  report and no comment.
+
+  When the backlog is larger than `max_issues`, the window rotates with the
+  calendar month, so every issue is re-checked over a few runs. As in
+  `conversion.yml`, the one-report-per-month check runs in shell before the
+  Claude step. The checkout uses the full git history. It does not accept
+  `severity_threshold`. Suggested cadence: monthly on the 28th, after the
+  month's audits have run:
+
+  ```yaml
+  name: Backlog grooming
+  on:
+    schedule:
+      - cron: '29 6 28 * *'   # monthly, 28th 06:29
+    workflow_dispatch:
+  permissions:
+    contents: read
+    issues: write          # the report issue and the evidence comments
+    id-token: write        # required: claude-code-action authenticates via OIDC — never remove
+  jobs:
+    audit:
+      uses: fewlme/workflows/.github/workflows/backlog-groom.yml@<40-char-sha>  # v1
+      with:
+        comment: true      # false = report only, no comment on the issues
+        max_issues: 40
+      secrets:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  ```
+
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase, the git history and the web for new-feature
   opportunities, curates the 3-5 strongest and files each as its own
@@ -424,10 +475,10 @@ repo — stagger them:
   three copies of `0 7 * * 1`.
 - Keep the monthly reports (`dependency-health` on the 1st, `config-drift` on
   the 5th, `ui-ux` on the 8th, `tracking-qa` on the 12th, `rd-ideas` on the 15th,
-  `email-qa` on the 18th, `seo` on the 22nd, `conversion` on the 26th) on
-  different days, and put the
-  quarterly audits on days of their own (`legal-compliance` on the 3rd,
-  `help-content` on the 20th, `supportability` on the 24th).
+  `email-qa` on the 18th, `seo` on the 22nd, `conversion` on the 26th,
+  `backlog-groom` on the 28th) on different days, and put the quarterly audits
+  on days of their own (`legal-compliance` on the 3rd, `help-content` on the
+  20th, `supportability` on the 24th).
 - Cron runs in UTC by default; set `on.schedule[].timezone` (e.g.
   `timezone: Europe/Paris`) on a schedule entry if you want local time.
 
@@ -440,11 +491,11 @@ column:
 | Input | Type | Default | Notes |
 |---|---|---|---|
 | `ref` | string | `''` | Branch, tag or SHA to check out and audit. Empty = the ref that triggered the caller, i.e. the default branch for `schedule` / `workflow_dispatch`. Use it to audit a non-default branch such as `preprod` — the caller must still live on the default branch, since GitHub only fires schedules from there. `docs.yml` opens its auto-fix PR against this branch. |
-| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` / `conversion` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops` / `tracking-qa` / `email-qa` / `help-content` / `supportability`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
-| `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
+| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` / `conversion` / `backlog-groom` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops` / `tracking-qa` / `email-qa` / `help-content` / `supportability`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
+| `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues; in `backlog-groom`, no comments either). |
 | `claude_model` | string | `claude-sonnet-5` (`claude-opus-5` for `security-audit`) | Model used for the audit; `claude-sonnet-5` is also the fallback model everywhere. For large monorepos a caller can pass `claude-sonnet-5[1m]` (1M-token context). |
 | `effort` | string | `high` | Reasoning effort for the Claude session: `low`/`medium`/`high`/`xhigh`/`max`. |
-| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas` / `tracking-qa` / `help-content`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
+| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas` / `tracking-qa` / `help-content` / `conversion`, `320` for `backlog-groom`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
 | `site_url` | string | `''` | **`seo.yml`, `tracking-qa.yml` and `conversion.yml`** — deployed-site URL. `seo`: live robots/sitemap/rendered-page checks. `tracking-qa`: tags on the served homepage, CSP, and campaign parameters through the redirect chain. `conversion`: served HTML of the paths in `pages`. |
 | `pages` | string | `/` | **`conversion.yml` only** — comma-separated paths to probe on `site_url` (`/,/tarifs,/inscription`). Plain paths only (no query string), at most 8; ignored without `site_url`. |
@@ -452,6 +503,8 @@ column:
 | `editorial` | boolean | `true` | **`seo.yml` only** — run the editorial copy-suggestions pass (one consolidated report issue per month). Set `false` to skip it. |
 | `editorial_model` | string | `claude-opus-5` | **`seo.yml` only** — model for the editorial pass (the technical audit still uses `claude_model`). |
 | `editorial_max_turns` | number | `180` | **`seo.yml` only** — turn cap for the editorial Claude session (same `num_turns` semantics as `max_turns`). |
+| `comment` | boolean | `true` | **`backlog-groom.yml` only** — post one evidence comment on each open issue that looks fixed or obsolete. It never closes the issue. Ignored when `create_issues` is `false`. |
+| `max_issues` | number | `40` | **`backlog-groom.yml` only** — how many open issues to re-check against the code per run; a larger backlog rotates month by month. Raise `max_turns` with it (about 4 turns per issue). |
 | `site_urls` | string | `''` | **`live-site-ops.yml` only** — comma-separated `https://` URLs to scan, one per public host (`https://example.com,https://admin.example.com`). Required in practice: the job skips without it. |
 | `deep_tls` | boolean | `false` | **`live-site-ops.yml` only** — also run testssl.sh (adds 2-4 min per host). |
 
@@ -464,9 +517,10 @@ missing, so this step is what keeps findings labelled.
 
 Issues are authored by **`github-actions[bot]`**: the Claude step runs `gh`
 on the job token (scoped by the caller's `permissions:`), not on a Claude
-GitHub App token. `dependency-health`, the `seo` editorial pass and `conversion` file **one
-report per calendar month** (title suffix `- YYYY-MM`); a second run in the
-same month skips creation even when that month's report is already closed.
+GitHub App token. `dependency-health`, the `seo` editorial pass, `conversion` and
+`backlog-groom` file **one report per calendar month** (title suffix
+`- YYYY-MM`); a second run in the same month skips creation even when that
+month's report is already closed.
 `rd-ideas` files **one issue per idea**, one batch per calendar month, and
 matches new ideas against every past `idea` issue by meaning rather than exact
 title.
@@ -498,6 +552,7 @@ includes the severity, so a finding whose severity changes counts as new.
 | help-content | `help-content` + severity |
 | supportability | `supportability` + severity |
 | conversion | `conversion` |
+| backlog-groom | `backlog` (on its report issue only; it never relabels the issues it reviews) |
 
 ## Versioning
 
@@ -588,7 +643,7 @@ manual `v1` move are the only checks left.
 | `overageStatus rejected` / `api_retry` in the Claude step log | The subscription's shared 5-hour usage window is exhausted — several repos ran at once and there is no overage | Stagger the crons across repos (see [Scheduling](#scheduling)); re-run later with `gh workflow run` |
 | Slack says `FAILED` | The Slack step reports the **Claude step outcome**: anything but `success` (turn cap, auth, rate limit) is FAILED, even when the job itself finished | Open the run link; the `Run telemetry` table in the summary shows `num_turns/max_turns` and the result subtype |
 | Caller fails validation with a permissions error for `docs.yml` | The reusable job declares `contents: write` + `pull-requests: write` and a called workflow cannot elevate beyond its caller | Grant both in the caller, regardless of `create_pr` |
-| Caller fails validation with an input not defined in the referenced workflow | `severity_threshold` passed to `dependency-health` / `docs` / `rd-ideas`, or a workflow-specific input (`site_url`, `site_urls`, `pages`, `deep_tls`, `editorial*`, `create_pr`) passed to the wrong workflow | Remove the input (see the scope column in [Inputs](#inputs)) |
+| Caller fails validation with an input not defined in the referenced workflow | `severity_threshold` passed to `dependency-health` / `docs` / `rd-ideas`, or a workflow-specific input (`site_url`, `site_urls`, `pages`, `comment`, `max_issues`, `deep_tls`, `editorial*`, `create_pr`) passed to the wrong workflow | Remove the input (see the scope column in [Inputs](#inputs)) |
 | Issues created without labels | Labels missing **and** running an old pin without the label-creation step | Merge the Dependabot PR (or manually repin) to the SHA `v1` points to |
 | A fix isn't taking effect | Consumer pinned to an old SHA, or `v1` was never moved after the merge | Move `v1` (see [Versioning](#versioning)), then merge the pending Dependabot bump or repin to the SHA from `gh api repos/fewlme/workflows/commits/v1 --jq .sha` |
 | Audit ran but filed nothing | No findings at `severity_threshold`, `create_issues: false`, the audit skipped itself (no frontend / web project / config surface / `site_urls` / analytics, email or help content), or a monthly report already exists for this month | Lower the threshold / check the run summary |
@@ -615,6 +670,9 @@ manual `v1` move are the only checks left.
   `gh workflow`, `curl`/`wget` and issue close/edit/delete to the Claude
   session; `docs.yml` can push its `docs/auto-fix-<date>` branch and open a PR
   but is denied force-pushes, pushes to `master`/`main` and `gh pr merge`.
+  `backlog-groom.yml` reads the repository only, and besides its report it
+  may comment on existing issues; closing, editing and deleting issues stay
+  denied to it as to every other workflow.
 - **Single session, deterministic.** `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=1`
   and `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1` back the "do everything in this
   session" rule in the prompts; findings are filed as soon as they are confirmed,
