@@ -3,9 +3,9 @@
 Reusable GitHub Actions workflows that run Claude-powered audits (code quality,
 security, performance, accessibility, dependency health, documentation, legal
 compliance, UI/UX, SEO, configuration drift, live-site operations, analytics
-tracking) on a schedule and open labelled GitHub issues for findings — plus a
-forward-looking R&D ideation workflow that proposes what to build next.
-Thirteen workflows in total.
+tracking, transactional email, help content, supportability) on a schedule and
+open labelled GitHub issues for findings — plus a forward-looking R&D ideation
+workflow that proposes what to build next. Sixteen workflows in total.
 
 Consumer repos reference these workflows by a **full commit SHA** (with `# v1` as a
 readable comment), and a per-repo **Dependabot** keeps that SHA current. The
@@ -29,6 +29,9 @@ see [Versioning](#versioning).
 | `config-drift.yml` | Drift between code, committed env examples, compose files, Dockerfiles and CI: missing/dead env keys, compose validity, hadolint, Node/PHP version skew (skips if no config surface) | 5th of month 06:00 |
 | `live-site-ops.yml` | Live scan of the hosts in `site_urls`: availability/redirects, security headers vs code, TLS certificate, SPF/DMARC/CAA/DNSSEC, domain expiry (skips if no URL given) | Sun 05:37 |
 | `tracking-qa.yml` | Analytics & conversion tracking QA: duplicate tags, untracked or click-time conversions, double counting, PII in events, attribution lost on redirects, tracking-plan drift; optional live tag/CSP check (skips if no analytics code) | 12th of month 06:00 |
+| `email-qa.yml` | Transactional & lifecycle email QA: variables the sender never passes, localhost/staging links, missing plaintext or unsubscribe, credentials in mail, tokens without expiry, swallowed send failures, lifecycle gaps (skips if no email code) | 18th of month 06:00 |
+| `help-content.yml` | End-user help content (FAQ, help centre, onboarding, guides) vs the real product: contradicted steps, limits, prices and terms, stale references, uncovered core flows with a draft entry (skips if no help content) | Quarterly (20th 06:00) |
+| `supportability.yml` | What will generate support requests: unhelpful or leaking error messages, silent failures, self-service gaps, dead ends, missing correlation IDs and staff tooling (skips if no UI and no routes) | Quarterly (24th 06:00) |
 
 The schedules above are examples — every consumer shares one Claude
 subscription, so offset them per repo (see [Scheduling](#scheduling)).
@@ -224,6 +227,44 @@ no longer needed by any workflow. Per-workflow notes:
         SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
   ```
 
+- **`email-qa.yml`** → no extra permissions and no inputs beyond the common
+  ones (issue-only, like `code-quality.yml`). Audits the emails the code
+  already sends: template variables the sender never passes, unescaped user
+  data, links to `localhost` or a staging host, reset links built from the
+  request host, missing plaintext part, marketing mail without an unsubscribe
+  link or opt-out check, passwords or tokens in clear, reset tokens that never
+  expire, inline sends where a queue exists and send failures reported as
+  success. The run summary always includes the email inventory and a lifecycle
+  coverage table (welcome, verification, reset, receipt, failed payment, …).
+  A deterministic inventory of template files and send sites runs first, and
+  the job skips itself when it finds neither. It never sends a mail. SPF/DKIM/
+  DMARC stay with `live-site-ops.yml`; consent collection stays with
+  `legal-compliance.yml`. Suggested cadence: monthly on the 18th
+  (`cron: '0 6 18 * *'`).
+
+- **`help-content.yml`** → no extra permissions and no inputs beyond the
+  common ones. Compares end-user help content (FAQ, help centre, onboarding,
+  in-app guides) with the code: steps, labels, limits, prices and terms the
+  product no longer matches, dead links, entries missing from a shipped
+  locale, and core flows no entry covers — each coverage finding carries a
+  ready-to-paste draft entry in the language of the existing content. Every
+  contradiction cites both the help text and the code. Skips itself when no
+  help content is found; developer docs stay with `docs.yml` and legal
+  documents with `legal-compliance.yml`. Help content churns slowly, so a
+  quarterly schedule is enough (`cron: '0 6 20 */3 *'`).
+
+- **`supportability.yml`** → no extra permissions and no inputs beyond the
+  common ones. Audits what happens when something goes wrong: error messages
+  with no cause or next step, internal details shown to users, failures that
+  are silent or reported as success, self-service gaps (password reset, email
+  change, invoice download, account deletion, …), dead-end error pages,
+  missing correlation IDs and logging, and whether staff can look up a user or
+  resend a mail without database access. The run summary always includes a
+  self-service table and a support-tooling table. It runs on any repo with a
+  UI layer or routes/controllers and skips itself otherwise. Missing or
+  inconsistent loading/empty/error states stay with `ui-ux.yml`. Suggested
+  cadence: quarterly (`cron: '0 6 24 */3 *'`).
+
 - **`rd-ideas.yml`** → no extra permissions (issue-only, like `code-quality.yml`).
   It scouts the codebase, the git history and the web for new-feature
   opportunities, curates the 3-5 strongest and files each as its own
@@ -349,7 +390,9 @@ repo — stagger them:
   three copies of `0 7 * * 1`.
 - Keep the monthly reports (`dependency-health` on the 1st, `config-drift` on
   the 5th, `ui-ux` on the 8th, `tracking-qa` on the 12th, `rd-ideas` on the 15th,
-  `seo` on the 22nd) on different days, and put the quarterly legal audit on the 3rd.
+  `email-qa` on the 18th, `seo` on the 22nd) on different days, and put the
+  quarterly audits on days of their own (`legal-compliance` on the 3rd,
+  `help-content` on the 20th, `supportability` on the 24th).
 - Cron runs in UTC by default; set `on.schedule[].timezone` (e.g.
   `timezone: Europe/Paris`) on a schedule entry if you want local time.
 
@@ -362,11 +405,11 @@ column:
 | Input | Type | Default | Notes |
 |---|---|---|---|
 | `ref` | string | `''` | Branch, tag or SHA to check out and audit. Empty = the ref that triggered the caller, i.e. the default branch for `schedule` / `workflow_dispatch`. Use it to audit a non-default branch such as `preprod` — the caller must still live on the default branch, since GitHub only fires schedules from there. `docs.yml` opens its auto-fix PR against this branch. |
-| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops` / `tracking-qa`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
+| `severity_threshold` | string | `high` | Min severity to file issues for (`critical`/`high`/`medium`/`low`). **Not accepted** by `dependency-health` / `docs` / `rd-ideas` — passing it fails workflow validation. In `code-quality` / `performance` / `legal-compliance` / `security-audit` / `config-drift` / `live-site-ops` / `tracking-qa` / `email-qa` / `help-content` / `supportability`, findings below the threshold are still listed in a collapsed "Below threshold" block of the run summary. In `security-audit` it gates **confirmed** findings only: `needs-validation` findings are unscored by design and are always reported and filed (see [Issue labels](#issue-labels)). |
 | `create_issues` | boolean | `true` | Set `false` for a dry run (summary only, no issues). |
 | `claude_model` | string | `claude-sonnet-5` (`claude-opus-5` for `security-audit`) | Model used for the audit; `claude-sonnet-5` is also the fallback model everywhere. For large monorepos a caller can pass `claude-sonnet-5[1m]` (1M-token context). |
 | `effort` | string | `high` | Reasoning effort for the Claude session: `low`/`medium`/`high`/`xhigh`/`max`. |
-| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas` / `tracking-qa`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
+| `max_turns` | number | `240` (`180` for `dependency-health` / `rd-ideas` / `tracking-qa` / `help-content`, `400` for `security-audit`) | Turn cap for the Claude session. Under claude-code-action >= 1.0.188 the step also fails when the reported `num_turns` (= tool calls + 1) exceeds it, so keep ~3x the intended number of round trips. The run summary's telemetry table shows `num_turns/max_turns`. |
 | `create_pr` | boolean | `false` | **`docs.yml` only** — open a PR for mechanical fixes. |
 | `site_url` | string | `''` | **`seo.yml` and `tracking-qa.yml`** — deployed-site URL. `seo`: live robots/sitemap/rendered-page checks. `tracking-qa`: tags on the served homepage, CSP, and campaign parameters through the redirect chain. |
 | `tracking_plan` | string | `''` | **`tracking-qa.yml` only** — repo path to a tracking plan to diff the code against. Empty = auto-detect a tracked `*tracking-plan*` / `*tracking_plan*` file. |
@@ -415,6 +458,9 @@ includes the severity, so a finding whose severity changes counts as new.
 | config-drift | `config` + severity |
 | live-site-ops | `ops` + severity |
 | tracking-qa | `tracking` + severity |
+| email-qa | `email` + severity |
+| help-content | `help-content` + severity |
+| supportability | `supportability` + severity |
 
 ## Versioning
 
@@ -508,7 +554,7 @@ manual `v1` move are the only checks left.
 | Caller fails validation with an input not defined in the referenced workflow | `severity_threshold` passed to `dependency-health` / `docs` / `rd-ideas`, or a workflow-specific input (`site_url`, `site_urls`, `deep_tls`, `editorial*`, `create_pr`) passed to the wrong workflow | Remove the input (see the scope column in [Inputs](#inputs)) |
 | Issues created without labels | Labels missing **and** running an old pin without the label-creation step | Merge the Dependabot PR (or manually repin) to the SHA `v1` points to |
 | A fix isn't taking effect | Consumer pinned to an old SHA, or `v1` was never moved after the merge | Move `v1` (see [Versioning](#versioning)), then merge the pending Dependabot bump or repin to the SHA from `gh api repos/fewlme/workflows/commits/v1 --jq .sha` |
-| Audit ran but filed nothing | No findings at `severity_threshold`, `create_issues: false`, the audit skipped itself (no frontend / web project / config surface / `site_urls`), or a monthly report already exists for this month | Lower the threshold / check the run summary |
+| Audit ran but filed nothing | No findings at `severity_threshold`, `create_issues: false`, the audit skipped itself (no frontend / web project / config surface / `site_urls` / analytics, email or help content), or a monthly report already exists for this month | Lower the threshold / check the run summary |
 | A scanner report is missing or empty in `security-audit` / `dependency-health` | That scan failed; the Claude prompt treats a missing, 0-byte or `error` report as **failed**, never as clean | Check `tool-status.txt` (rc + byte count per scanner) in the `*-reports-<run_id>` artifact and the job log |
 
 ## Notes
