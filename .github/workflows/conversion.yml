@@ -69,6 +69,8 @@ jobs:
 
       - name: Detect conversion surfaces
         id: stack
+        env:
+          SITE_URL: ${{ inputs.site_url }}
         run: |
           IS_FRONTEND=false
           # Scan every tracked package.json, not just the root: monorepo roots
@@ -101,7 +103,7 @@ jobs:
           # UI files whose path names a conversion surface (signup, pricing, checkout, contact, booking, …);
           # email templates are not pages.
           git ls-files -- . "${EX[@]}" | grep -E "$UI" \
-            | grep -iE '(sign-?_?up|regist|inscription|pricing|tarif|checkout|paiement|payment|subscri|abonnement|contact|demo|devis|quote|newsletter|waitlist|trial|essai|booking|reserv|cart|panier|lead|landing|hero|cta)' \
+            | grep -iE '(sign-?_?up|regist|inscription|pricing|tarif|checkout|paiement|payment|subscri|abonnement|contact|demo|devis|quote|newsletter|waitlist|trial|essai|booking|reserv|rendez|audit|candidat|apply|join|cart|panier|lead|landing|hero|cta)' \
             | grep -ivE '(^|/)(e-?mails?|mails?|mailers?|notifications?)/' \
             > conversion-surfaces.txt || true
           # UI files that contain a form.
@@ -122,7 +124,9 @@ jobs:
           rm -f conversion-surfaces.txt conversion-forms.txt
           CONTEXT=$(git ls-files '.agents/product-marketing.md' | head -1)
           {
-            echo "has_surfaces=$({ [ "$IS_FRONTEND" = "true" ] && [ "$SURFACES" -gt 0 ]; } && echo true || echo false)"
+            # The path list is only a hint: a landing page whose form lives in index.html matches no keyword,
+            # so any form counts, and an explicit site_url always means "this site converts visitors — review it".
+            echo "has_surfaces=$({ [ "$IS_FRONTEND" = "true" ] && { [ $((SURFACES + FORMS)) -gt 0 ] || [ -n "$SITE_URL" ]; }; } && echo true || echo false)"
             echo "surfaces=$SURFACES"
             echo "forms=$FORMS"
             echo "context=$CONTEXT"
@@ -132,7 +136,7 @@ jobs:
         if: steps.stack.outputs.has_surfaces != 'true'
         run: |
           echo "## Conversion Review Skipped" >> "$GITHUB_STEP_SUMMARY"
-          echo "No UI layer, or no signup, pricing, checkout, contact or booking surface found in tracked files. This review runs on projects that turn visitors into leads, signups or customers." >> "$GITHUB_STEP_SUMMARY"
+          echo "No UI layer, or no form and no signup, pricing, checkout, contact or booking page found in tracked files (and no site_url given). This review runs on projects that turn visitors into leads, signups or customers." >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Check for this month's report

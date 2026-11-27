@@ -34,7 +34,7 @@ see [Versioning](#versioning).
 | `email-qa.yml` | Transactional & lifecycle email QA: variables the sender never passes, localhost/staging links, missing plaintext or unsubscribe, credentials in mail, tokens without expiry, swallowed send failures, lifecycle gaps (skips if no email code) | 18th of month 06:00 |
 | `help-content.yml` | End-user help content (FAQ, help centre, onboarding, guides) vs the real product: contradicted steps, limits, prices and terms, stale references, uncovered core flows with a draft entry (skips if no help content) | Quarterly (20th 06:00) |
 | `supportability.yml` | What will generate support requests: unhelpful or leaking error messages, silent failures, self-service gaps, dead ends, missing correlation IDs and staff tooling (skips if no UI and no routes) | Quarterly (24th 06:00) |
-| `conversion.yml` | Conversion (CRO) review of signup, pricing, checkout and lead forms: 5-8 ranked recommendations with hypothesis, before/after and how to measure, one report issue per calendar month; optional live-page probes (skips if no conversion surface) | 26th of month 06:00 |
+| `conversion.yml` | Conversion (CRO) review of signup, pricing, checkout and lead forms: 5-8 ranked recommendations with hypothesis, before/after and how to measure, one report issue per calendar month; optional live-page probes (skips if no UI layer, or no form and no conversion page) | 26th of month 06:00 |
 | `backlog-groom.yml` | Backlog hygiene: re-checks open issues against the current code (still present / appears fixed / obsolete, with the fixing commit), flags duplicates, stale and mislabelled issues, one report issue per calendar month plus one evidence comment per resolved issue — never closes anything (skips if no open issue) | 28th of month 06:00 |
 
 The schedules above are examples — every consumer shares one Claude
@@ -280,7 +280,10 @@ no longer needed by any workflow. Per-workflow notes:
   pattern. A shell step checks for this month's report **before** the Claude
   step, so a second run in the same month costs no Claude session (a
   `create_issues: false` dry run always runs). The job skips itself when the
-  repo has no UI layer or no conversion surface. Pass `site_url` and `pages`
+  repo has no UI layer, or has neither a form nor a page named like a
+  conversion surface — unless `site_url` is given, which always means "review
+  this site". On a repo that turns out to have no acquisition surface (an
+  internal tool), the review says so and files nothing. Pass `site_url` and `pages`
   to also read the served HTML of those pages (GET only — no form is ever
   submitted). If the repo tracks `.agents/product-marketing.md`, the review
   reads it first for audience and positioning. It does not accept
